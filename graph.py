@@ -2,15 +2,8 @@ from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 from models import CampaignState
 from tools.discovery import load_openapi_tools_node
-
-# --- Placeholder Nodes (We will build real ones later) ---
-def brief_parser_node(state: CampaignState) -> dict:
-    print("🤖 Agent: Parsing brief...")
-    return {}
-
-def customer_profiling_node(state: CampaignState) -> dict:
-    print("🤖 Agent: Profiling customers...")
-    return {}
+from agents.brief_parser import brief_parser_node
+from agents.profiler import customer_profiling_node
 
 def strategy_node(state: CampaignState) -> dict:
     print("🤖 Agent: Planning strategy...")
