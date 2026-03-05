@@ -7,11 +7,33 @@ import uuid
 import time
 from graph import build_campaign_graph
 
+# app = FastAPI(
+#     title="CampaignX Backend",
+#     openapi_url="/openapi.json", # Explicitly set this
+#     docs_url="/docs"
+# )
+
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="CampaignX Backend",
-    openapi_url="/openapi.json", # Explicitly set this
+    openapi_url="/openapi.json", 
     docs_url="/docs"
 )
+
+# Add this CORS middleware block so Lovable can connect!
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Allows all origins for development
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+async def health_check():
+    """Simple health check for the frontend to verify the API is online."""
+    return {"status": "online", "message": "CampaignX API is running"}
 
 # In-memory registry
 active_graphs = {}
@@ -50,21 +72,26 @@ async def get_campaign_state(thread_id: str):
     config = {"configurable": {"thread_id": thread_id}}
     state = active_graphs[thread_id].get_state(config)
     
-    # Check if we are at the HITL interrupt
-    is_awaiting = state.next and state.next[0] == "hitl_approval"
+    # NEW: Properly determine if the graph is completely finished
+    if not state.next:
+        current_status = "completed"
+    elif state.next[0] == "hitl_approval":
+        current_status = "awaiting_approval"
+    else:
+        current_status = "running"
     
     return {
-            "status": "awaiting_approval" if is_awaiting else "running",
-            "thread_id": thread_id,
-            "next_node": state.next,
-            "data": {
-                "current_variants": [v.model_dump() for v in state.values.get("current_variants", [])],
-                "active_segments": [s.model_dump() for s in state.values.get("active_segments", [])],
-                "performance_reports": [r.model_dump() for r in state.values.get("performance_reports", [])],
-                "optimization_history": [h.model_dump() for h in state.values.get("optimization_history", [])]
-            }
+        "status": current_status,
+        "thread_id": thread_id,
+        "next_node": state.next,
+        "data": {
+            "current_variants": [v.model_dump() for v in state.values.get("current_variants", [])],
+            "active_segments": [s.model_dump() for s in state.values.get("active_segments", [])],
+            "performance_reports": [r.model_dump() for r in state.values.get("performance_reports", [])],
+            "optimization_history": [h.model_dump() for h in state.values.get("optimization_history", [])]
         }
-
+    }
+    
 @app.post("/campaign/{thread_id}/approve")
 async def approve_campaign(thread_id: str, background_tasks: BackgroundTasks):
     if thread_id not in active_graphs:
