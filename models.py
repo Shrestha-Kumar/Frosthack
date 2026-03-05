@@ -68,8 +68,9 @@ class ToolDefinition(BaseModel):
 class CampaignState(TypedDict):
     raw_brief: str
     parsed_brief: Optional[ParsedBrief]
-    full_cohort: Annotated[List[CustomerProfile], operator.add]
+    full_cohort: List[CustomerProfile]
     active_segments: List[MicroSegment]
+    latest_api_error: Optional[str] # Add this to fix Bug #4
     current_variants: List[EmailVariant]
     approved_variants: List[EmailVariant]
     scheduled_campaign_ids: Annotated[List[str], operator.add]

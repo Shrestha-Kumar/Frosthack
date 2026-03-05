@@ -20,16 +20,16 @@ class VariantStrategy(BaseModel):
 class SegmentStrategyPlan(BaseModel):
     variants: List[VariantStrategy]
 
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile", 
+    temperature=0.2, # slight variance for A/B testing ideas
+    api_key=os.getenv("GROQ_API_KEY")
+)
+
+structured_llm = llm.with_structured_output(SegmentStrategyPlan)
+
 def strategy_node(state: CampaignState) -> dict:
     print("🤖 Agent: Planning A/B strategy for segments...")
-    
-    llm = ChatGroq(
-        model="llama-3.3-70b-versatile", 
-        temperature=0.2, # slight variance for A/B testing ideas
-        api_key=os.getenv("GROQ_API_KEY")
-    )
-    
-    structured_llm = llm.with_structured_output(SegmentStrategyPlan)
     
     all_planned_variants = []
     

@@ -7,16 +7,16 @@ class GeneratedCopy(BaseModel):
     subject: str
     body_html: str
 
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile", 
+    temperature=0.4, # Higher temperature for copywriting creativity
+    api_key=os.getenv("GROQ_API_KEY")
+)
+
+structured_llm = llm.with_structured_output(GeneratedCopy)
+
 def creative_node(state: CampaignState) -> dict:
     print("🤖 Agent: Generating email HTML content...")
-    
-    llm = ChatGroq(
-        model="llama-3.3-70b-versatile", 
-        temperature=0.4, # Higher temperature for copywriting creativity
-        api_key=os.getenv("GROQ_API_KEY")
-    )
-    
-    structured_llm = llm.with_structured_output(GeneratedCopy)
     
     completed_variants = []
     parsed_brief = state.get("parsed_brief")
@@ -45,7 +45,12 @@ def creative_node(state: CampaignState) -> dict:
         - Elements to Italicize: {variant.italic_elements}
         - URL Placement: {variant.url_position}
 
-        Generate the subject line (no emojis) and the HTML body.
+        OUTPUT FORMAT:
+        You MUST return the output as a valid JSON object matching this exact structure, with no markdown formatting or extra text:
+        {{
+            "subject": "Your Subject Line Here",
+            "body_html": "<p>Your HTML email body here, ending with the URL: {cta_url}</p>"
+        }}
         """
         
         copy = structured_llm.invoke(prompt)

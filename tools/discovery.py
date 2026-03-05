@@ -50,7 +50,8 @@ def create_api_tool_from_operation(
     method: str,
     operation: dict,
     base_url: str,
-    api_key: str
+    api_key: str,
+    full_spec: dict = None  # Added to allow $ref lookups
 ) -> StructuredTool:
     """Dynamically create a LangChain StructuredTool from an OpenAPI operation."""
     operation_id = operation.get("operationId", f"{method}_{path.replace('/', '_')}")
@@ -74,6 +75,16 @@ def create_api_tool_from_operation(
     if request_body:
         content = request_body.get("content", {})
         json_schema = content.get("application/json", {}).get("schema", {})
+        
+        # --- NEW: Resolve $ref if it exists ---
+        if "$ref" in json_schema and full_spec:
+            ref_path = json_schema["$ref"].split("/")
+            resolved = full_spec
+            for part in ref_path[1:]:
+                resolved = resolved.get(part, {})
+            json_schema = resolved
+        # --------------------------------------
+
         for prop_name, prop_schema in json_schema.get("properties", {}).items():
             prop_type = _openapi_type_to_python(prop_schema.get("type", "string"))
             required_props = json_schema.get("required", [])
@@ -89,11 +100,10 @@ def create_api_tool_from_operation(
         validated = DynamicInputModel(**kwargs)
         url = f"{base_url}{path}"
         headers = {
-            "X-API-Key": api_key, # Updated to match CampaignX API header requirement
+            "X-API-Key": api_key,
             "Content-Type": "application/json"
         }
 
-        # Route the HTTP request
         try:
             if method.lower() == "get":
                 response = httpx.get(url, params=validated.model_dump(exclude_none=True), headers=headers)
@@ -126,16 +136,13 @@ def load_openapi_tools_node(state: CampaignState) -> dict:
 
     tools = []
     tool_definitions = []
-
-    from dotenv import load_dotenv
-    load_dotenv()
     
     base_url = os.getenv("CAMPAIGNX_API_BASE_URL", "http://localhost:4010")
     api_key = os.getenv("CAMPAIGNX_API_KEY", "mock_key")
 
     for path, path_item in compressed["paths"].items():
         for method, operation in path_item.items():
-            tool = create_api_tool_from_operation(path, method, operation, base_url, api_key)
+            tool = create_api_tool_from_operation(path, method, operation, base_url, api_key, spec)
             tools.append(tool)
             tool_definitions.append(ToolDefinition(
                 name=tool.name,

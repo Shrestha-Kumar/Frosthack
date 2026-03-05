@@ -15,11 +15,12 @@ def metrics_fetcher_node(state: CampaignState) -> dict:
     
     for i, camp_id in enumerate(state.get("scheduled_campaign_ids", [])):
         # Call the actual mock endpoint
+        # Call the actual mock endpoint
         response = report_tool.invoke({"campaign_id": camp_id})
         
-        # Simulate realistic gamified BFSI metrics since Prism only returns static dummy data
-        open_rate = round(random.uniform(0.15, 0.45), 3)
-        click_rate = round(random.uniform(0.02, 0.18), 3)
+        # Extract REAL metrics from the API response, fallback to mock data only if missing
+        open_rate = response.get("open_rate", round(random.uniform(0.15, 0.45), 3))
+        click_rate = response.get("click_rate", round(random.uniform(0.02, 0.18), 3))
         
         # The exact hackathon evaluation formula
         composite = (0.7 * click_rate) + (0.3 * open_rate)

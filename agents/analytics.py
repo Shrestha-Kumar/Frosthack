@@ -11,16 +11,16 @@ class OptimizationDecision(BaseModel):
     segments_retargeted: List[str]
     should_continue: bool
 
+llm = ChatGroq(
+    model="llama-3.3-70b-versatile", 
+    temperature=0.1, 
+    api_key=os.getenv("GROQ_API_KEY")
+)
+
+structured_llm = llm.with_structured_output(OptimizationDecision)
+
 def analytics_node(state: CampaignState) -> dict:
     print("🤖 Agent: Analyzing results and deciding next steps...")
-    
-    llm = ChatGroq(
-        model="llama-3.3-70b-versatile", 
-        temperature=0.1, 
-        api_key=os.getenv("GROQ_API_KEY")
-    )
-    
-    structured_llm = llm.with_structured_output(OptimizationDecision)
     
     iteration = state.get("iteration_count", 0)
     reports = state.get("performance_reports", [])
@@ -38,9 +38,9 @@ def analytics_node(state: CampaignState) -> dict:
     {perf_data}
     
     Analyze the results:
-    1. Identify the winning variants.
+    1. Identify the winning variants per segment.
     2. Write a brief insight on what likely caused the win.
-    3. Decide if we should continue optimizing (True if iteration is 0 or 1, False if 2 or higher).
+    3. Determine if we should continue optimizing. Return should_continue = True ONLY IF the highest composite score is below 0.85 AND we have actionable ideas for improvement. Otherwise, return False.
     
     Return the structured OptimizationDecision.
     """

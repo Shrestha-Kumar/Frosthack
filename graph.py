@@ -36,7 +36,9 @@ def route_after_analysis(state: CampaignState) -> str:
     return "complete"
 
 def route_on_api_error(state: CampaignState) -> str:
-    if state.get("api_error_log") and len(state.get("api_error_log", [])) > 0:
+    # Only route to error if the most recent execution explicitly failed
+    latest_error = state.get("latest_api_error")
+    if latest_error is not None:
         return "error"
     return "success"
 
@@ -77,7 +79,6 @@ def build_campaign_graph():
     )
 
     # Post-execution
-    builder.add_edge("execute_campaign", "fetch_metrics")
     builder.add_edge("fetch_metrics", "analyze_optimize")
 
     # Optimization loop conditional
