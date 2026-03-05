@@ -6,23 +6,14 @@ from agents.brief_parser import brief_parser_node
 from agents.profiler import customer_profiling_node
 from agents.strategy import strategy_node
 from agents.creative import creative_node
+from agents.executor import execution_node
+from agents.metrics import metrics_fetcher_node
+from agents.analytics import analytics_node
 
 def hitl_interrupt_node(state: CampaignState) -> dict:
     # This node doesn't do much; the magic happens because LangGraph pauses BEFORE it.
     print("👨‍💻 HITL Node: Human action received!")
     return {}
-
-def execution_node(state: CampaignState) -> dict:
-    print("🤖 Agent: Executing campaign...")
-    return {}
-
-def metrics_fetcher_node(state: CampaignState) -> dict:
-    print("🤖 Agent: Fetching metrics...")
-    return {}
-
-def analytics_node(state: CampaignState) -> dict:
-    print("🤖 Agent: Analyzing results and optimizing...")
-    return {"iteration_count": state.get("iteration_count", 0) + 1}
 
 def error_correction_node(state: CampaignState) -> dict:
     print("🤖 Agent: Correcting API error...")
