@@ -4,14 +4,8 @@ from models import CampaignState
 from tools.discovery import load_openapi_tools_node
 from agents.brief_parser import brief_parser_node
 from agents.profiler import customer_profiling_node
-
-def strategy_node(state: CampaignState) -> dict:
-    print("🤖 Agent: Planning strategy...")
-    return {}
-
-def creative_node(state: CampaignState) -> dict:
-    print("🤖 Agent: Generating email content...")
-    return {}
+from agents.strategy import strategy_node
+from agents.creative import creative_node
 
 def hitl_interrupt_node(state: CampaignState) -> dict:
     # This node doesn't do much; the magic happens because LangGraph pauses BEFORE it.
