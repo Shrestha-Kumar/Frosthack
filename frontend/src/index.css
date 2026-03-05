@@ -1,0 +1,100 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222 47% 6%;
+    --foreground: 210 40% 96%;
+
+    --card: 222 44% 9%;
+    --card-foreground: 210 40% 96%;
+
+    --popover: 222 44% 9%;
+    --popover-foreground: 210 40% 96%;
+
+    --primary: 217 91% 60%;
+    --primary-foreground: 222 47% 6%;
+
+    --secondary: 222 40% 14%;
+    --secondary-foreground: 210 40% 90%;
+
+    --muted: 222 40% 14%;
+    --muted-foreground: 215 20% 55%;
+
+    --accent: 168 84% 50%;
+    --accent-foreground: 222 47% 6%;
+
+    --destructive: 0 72% 55%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 222 30% 16%;
+    --input: 222 30% 16%;
+    --ring: 217 91% 60%;
+
+    --radius: 0.75rem;
+
+    --glow-primary: 217 91% 60%;
+    --glow-accent: 168 84% 50%;
+
+    --sidebar-background: 222 44% 8%;
+    --sidebar-foreground: 210 40% 96%;
+    --sidebar-primary: 217 91% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 222 40% 14%;
+    --sidebar-accent-foreground: 210 40% 96%;
+    --sidebar-border: 222 30% 16%;
+    --sidebar-ring: 217 91% 60%;
+
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+}
+
+@layer utilities {
+  .glass {
+    @apply bg-card/60 backdrop-blur-xl border border-border/50;
+  }
+  .glass-strong {
+    @apply bg-card/80 backdrop-blur-2xl border border-border/60;
+  }
+  .glow-primary {
+    box-shadow: 0 0 30px -5px hsl(var(--primary) / 0.35),
+                0 0 80px -15px hsl(var(--primary) / 0.15);
+  }
+  .glow-accent {
+    box-shadow: 0 0 30px -5px hsl(var(--accent) / 0.35),
+                0 0 80px -15px hsl(var(--accent) / 0.15);
+  }
+  .glow-primary-sm {
+    box-shadow: 0 0 15px -3px hsl(var(--primary) / 0.3);
+  }
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-accent;
+  }
+  .gradient-border {
+    position: relative;
+  }
+  .gradient-border::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(135deg, hsl(var(--primary) / 0.5), hsl(var(--accent) / 0.3));
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+}
