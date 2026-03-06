@@ -33,6 +33,12 @@ def strategy_node(state: CampaignState) -> dict:
     
     all_planned_variants = []
     
+    # Check if this is a regeneration run with human feedback
+    feedback = state.get("hitl_feedback")
+    feedback_instruction = ""
+    if feedback and state.get("hitl_status") == "rejected":
+        feedback_instruction = f"\n        CRITICAL HUMAN FEEDBACK FROM PREVIOUS RUN (MUST FOLLOW STRICTLY):\n        \"{feedback}\"\n        Adjust your strategy to explicitly satisfy this feedback."
+    
     for segment in state.get("active_segments", []):
         prompt = f"""
         You are a digital marketing strategist for an Indian BFSI company.
@@ -49,6 +55,7 @@ def strategy_node(state: CampaignState) -> dict:
         - Variant 2 should test a slightly different angle (e.g., more urgency, different formatting).
         - CTA URL must be included in both.
         - Seniors should have minimal to no emojis. Working age can have 1-2.
+        {feedback_instruction}
         
         Return the structured plan.
         """

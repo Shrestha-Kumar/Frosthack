@@ -70,7 +70,7 @@ class CampaignState(TypedDict):
     parsed_brief: Optional[ParsedBrief]
     full_cohort: List[CustomerProfile]
     active_segments: List[MicroSegment]
-    latest_api_error: Optional[str] # Add this to fix Bug #4
+    latest_api_error: Optional[str]
     current_variants: List[EmailVariant]
     approved_variants: List[EmailVariant]
     scheduled_campaign_ids: Annotated[List[str], operator.add]
@@ -83,5 +83,5 @@ class CampaignState(TypedDict):
     should_continue_optimization: bool
     openapi_spec: Optional[dict]
     discovered_tools: List[ToolDefinition]
-    api_error_log: Annotated[List[str], operator.add]
+    api_error_log: List[dict]
     messages: Annotated[List[dict], operator.add]

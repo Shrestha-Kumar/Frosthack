@@ -9,15 +9,7 @@ from agents.creative import creative_node
 from agents.executor import execution_node
 from agents.metrics import metrics_fetcher_node
 from agents.analytics import analytics_node
-
-def hitl_interrupt_node(state: CampaignState) -> dict:
-    # This node doesn't do much; the magic happens because LangGraph pauses BEFORE it.
-    print("👨‍💻 HITL Node: Human action received!")
-    return {}
-
-def error_correction_node(state: CampaignState) -> dict:
-    print("🤖 Agent: Correcting API error...")
-    return {}
+from agents.error_handler import error_correction_node
 
 # --- Routing Functions ---
 def route_after_hitl(state: CampaignState) -> str:
@@ -35,12 +27,16 @@ def route_after_analysis(state: CampaignState) -> str:
         return "optimize"
     return "complete"
 
-def route_on_api_error(state: CampaignState) -> str:
-    # Only route to error if the most recent execution explicitly failed
-    latest_error = state.get("latest_api_error")
-    if latest_error is not None:
+def route_on_api_error(state: dict) -> str:
+    """Check if the execution agent logged any errors."""
+    if state.get("api_error_log") and len(state.get("api_error_log", [])) > 0:
         return "error"
     return "success"
+
+def hitl_interrupt_node(state: CampaignState) -> dict:
+    # This node doesn't do much; the magic happens because LangGraph pauses BEFORE it.
+    print("⏸️ HITL Node: Human action required!")
+    return {}
 
 # --- Graph Builder ---
 def build_campaign_graph():
@@ -78,6 +74,18 @@ def build_campaign_graph():
         }
     )
 
+    # Error handling edge
+    builder.add_conditional_edges(
+        "execute_campaign",
+        route_on_api_error,
+        {
+            "success": "fetch_metrics",      # No errors? Move to metrics.
+            "error": "error_correction",     # Error? Go heal.
+        }
+    )
+    
+    builder.add_edge("error_correction", "execute_campaign")
+
     # Post-execution
     builder.add_edge("fetch_metrics", "analyze_optimize")
 
@@ -90,17 +98,6 @@ def build_campaign_graph():
             "complete": END,
         }
     )
-
-    # Error edge
-    builder.add_conditional_edges(
-        "execute_campaign",
-        route_on_api_error,
-        {
-            "success": "fetch_metrics",
-            "error": "error_correction",
-        }
-    )
-    builder.add_edge("error_correction", "execute_campaign")
 
     # Compile with checkpointer for HITL
     memory = MemorySaver()

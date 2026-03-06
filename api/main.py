@@ -1,17 +1,29 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+# --- START: SILENCE LANGGRAPH WARNINGS ---
+import warnings
+import logging
+
+# Aggressively filter the exact warning messages
+warnings.filterwarnings("ignore", message=".*Deserializing unregistered type.*")
+warnings.filterwarnings("ignore", message=".*allowed_msgpack_modules.*")
+warnings.filterwarnings("ignore", module="langgraph.*")
+
+# Silence the specific LangGraph internal loggers causing the spam
+logging.getLogger("langgraph.checkpoint").setLevel(logging.ERROR)
+logging.getLogger("langgraph.checkpoint.serde").setLevel(logging.ERROR)
+logging.getLogger("langgraph.checkpoint.serde.msgpack").setLevel(logging.ERROR)
+# --- END: SILENCE LANGGRAPH WARNINGS ---
+
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 import uuid
 import time
 from graph import build_campaign_graph
+from langfuse.langchain import CallbackHandler
 
-# app = FastAPI(
-#     title="CampaignX Backend",
-#     openapi_url="/openapi.json", # Explicitly set this
-#     docs_url="/docs"
-# )
+langfuse_handler = CallbackHandler()
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -45,14 +57,17 @@ class CampaignStartRequest(BaseModel):
     brief: str
 
 def run_graph_until_interrupt(graph, config, brief):
-    # This fires the nodes we built in Day 3 & 4
+    # Inject Langfuse into the config
+    config["callbacks"] = [langfuse_handler]
+    
     graph.invoke(
         {"raw_brief": brief, "max_iterations": 3, "should_continue_optimization": False},
         config=config
     )
 
 def resume_graph(graph, config):
-    # This triggers the Day 5 nodes (Execution, Metrics, Analytics)
+    # Inject Langfuse into the config
+    config["callbacks"] = [langfuse_handler]
     graph.invoke(None, config=config)
 
 @app.post("/campaign/start")

@@ -11,7 +11,10 @@ def execution_node(state: CampaignState) -> dict:
     if not send_tool:
         raise ValueError("Send Campaign tool not found! Did discovery run?")
         
-    scheduled_ids = []
+    scheduled_ids = state.get("scheduled_campaign_ids", [])
+    
+    # THE FIX: Always start with an empty error list so old errors are wiped out!
+    current_errors = []
     
     # Iterate through our generated variants and "send" them
     for variant in state.get("current_variants", []):
@@ -20,8 +23,6 @@ def execution_node(state: CampaignState) -> dict:
         if not segment:
             continue
             
-        # Convert recommended "10:00 AM IST" to a future date in API format (DD:MM:YY HH:MM:SS)
-        # For hackathon purposes, we schedule it for tomorrow at the requested hour
         # Safely convert "07:00 PM IST" to 24-hour format "19:00:00"
         raw_time = segment.recommended_send_time
         time_parts = raw_time.split(" ")
@@ -43,13 +44,27 @@ def execution_node(state: CampaignState) -> dict:
             "send_time": formatted_send_time 
         }
         
-        # Fire the tool!
-        response = send_tool.invoke(payload)
-        
-        if "campaign_id" in response:
-            scheduled_ids.append(response["campaign_id"])
-            print(f"  -> Scheduled Campaign {response['campaign_id']} for Variant {variant.variant_id}")
-        else:
-            print(f"  -> API Error: {response}")
+        try:
+            # Fire the tool!
+            response = send_tool.invoke(payload)
             
-    return {"scheduled_campaign_ids": scheduled_ids}
+            if "campaign_id" in response:
+                scheduled_ids.append(response["campaign_id"])
+                print(f"  -> Scheduled Campaign {response['campaign_id']} for Variant {variant.variant_id}")
+            else:
+                # The tool returned an error dictionary from the mock API
+                error_msg = f"API Error for Variant {variant.variant_id}: {response}"
+                print(f"  -> {error_msg}")
+                current_errors.append(error_msg)
+                
+        except Exception as e:
+            # Catch any hard crashes (like network disconnections)
+            error_msg = f"System Error for Variant {variant.variant_id}: {str(e)}"
+            print(f"  -> {error_msg}")
+            current_errors.append(error_msg)
+            
+    # Return BOTH the successful IDs and the error log so the LangGraph can route appropriately
+    return {
+        "scheduled_campaign_ids": scheduled_ids,
+        "api_error_log": current_errors
+    }
