@@ -5,6 +5,10 @@ from models import CampaignState, CustomerProfile, MicroSegment
 from tools.discovery import get_loaded_tools
 
 def _generate_dummy_cohort() -> List[CustomerProfile]:
+    
+    # FIX 8: Seed for deterministic testing
+    random.seed(42)
+    
     """Generates 50 realistic mock customers for development testing."""
     cohort = []
     for i in range(1, 51):
@@ -90,7 +94,17 @@ def customer_profiling_node(state: CampaignState) -> dict:
             
         api_response = cohort_tool.invoke({})
         raw_customers = api_response.get("data", [])
-        full_cohort = [CustomerProfile(**c) for c in raw_customers]
+        def _map_api_customer(c: dict) -> CustomerProfile:
+            return CustomerProfile(
+                customer_id=c.get("customer_id"),
+                age=c.get("Age"),
+                gender="F" if c.get("Gender", "").lower() == "female" else "M",
+                status="active" if c.get("Existing Customer", "Y") == "Y" else "inactive",
+                employment=c.get("Occupation", "unknown"),
+                location=c.get("City", "India")
+            )
+
+        full_cohort = [_map_api_customer(c) for c in raw_customers]
         print(f"✅ Fetched {len(full_cohort)} customers from LIVE API.")
     
     # 4. Segment them based on the parsed brief

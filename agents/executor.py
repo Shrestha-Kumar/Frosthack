@@ -23,16 +23,19 @@ def execution_node(state: CampaignState) -> dict:
         if not segment:
             continue
             
-        # Safely convert "07:00 PM IST" to 24-hour format "19:00:00"
-        raw_time = segment.recommended_send_time
-        time_parts = raw_time.split(" ")
-        time_str = time_parts[0]
-        
-        if "PM" in raw_time and not time_str.startswith("12"):
-            h, m = time_str.split(":")
-            time_str = f"{int(h)+12:02d}:{m}"
-        elif "AM" in raw_time and time_str.startswith("12"):
-            time_str = f"00:{time_str.split(':')[1]}"
+        # FIX 6: Safe time parsing with a fallback to prevent crashes
+        try:
+            raw_time = segment.recommended_send_time
+            time_parts = raw_time.split(" ")
+            time_str = time_parts[0]
+            
+            if "PM" in raw_time and not time_str.startswith("12"):
+                h, m = time_str.split(":")
+                time_str = f"{int(h)+12:02d}:{m}"
+            elif "AM" in raw_time and time_str.startswith("12"):
+                time_str = f"00:{time_str.split(':')[1]}"
+        except Exception:
+            time_str = "10:00"  # safe default: 10 AM
 
         tomorrow = datetime.now() + timedelta(days=1)
         formatted_send_time = f"{tomorrow.strftime('%d:%m:%y')} {time_str}:00"

@@ -39,6 +39,18 @@ def strategy_node(state: CampaignState) -> dict:
     if feedback and state.get("hitl_status") == "rejected":
         feedback_instruction = f"\n        CRITICAL HUMAN FEEDBACK FROM PREVIOUS RUN (MUST FOLLOW STRICTLY):\n        \"{feedback}\"\n        Adjust your strategy to explicitly satisfy this feedback."
     
+    # FIX 4: Optimization loop memory
+    history = state.get("optimization_history", [])
+    history_context = ""
+    if history:
+        last = history[-1]
+        history_context = f"""
+        PREVIOUS ITERATION INSIGHT (MUST BUILD ON THIS):
+        Insight: {last.insight}
+        Action taken: {last.action_taken}
+        Segments to improve: {last.segments_retargeted}
+        """
+
     for segment in state.get("active_segments", []):
         prompt = f"""
         You are a digital marketing strategist for an Indian BFSI company.
@@ -48,6 +60,8 @@ def strategy_node(state: CampaignState) -> dict:
         Strategy Notes: {segment.strategy_notes}
         Psychological Hook: {segment.psychological_hook}
         Recommended Tone: {segment.recommended_tone}
+        
+        {history_context}
         
         CRITICAL RULES:
         - Generate exactly 2 variant strategies for this segment.

@@ -1,5 +1,5 @@
 # 🚀 CampaignX — Autonomous BFSI Marketing System
-**Built by Team Four Musketeers for FrostHack 2026** [cite: 2026-02-27]
+**Built by Team Four Musketeers for FrostHack 2026**
 
 CampaignX is an end-to-end agentic platform designed for the BFSI (Banking, Financial Services, and Insurance) sector. It utilizes a multi-agent LangGraph architecture to autonomously parse marketing briefs, segment customers, generate optimized A/B test email variants, and execute campaigns via a mock API with real-time performance tracking.
 
@@ -15,7 +15,7 @@ The system is built as a **Multi-Agent System (MAS)** where specialized agents c
 
 ## 🛠️ Tech Stack
 ### Backend
-* **Python 3.11** (Mamba/Conda environment) [cite: 2026-02-25].
+* **Python 3.11** (Mamba/Conda environment)
 * **LangGraph & LangChain**: Orchestrating agent workflows and state management.
 * **FastAPI**: High-performance web framework for the API layer.
 * **Groq (Llama 3.3 70B)**: High-speed inference for agent "reasoning."

@@ -28,10 +28,12 @@ def route_after_analysis(state: CampaignState) -> str:
     return "complete"
 
 def route_on_api_error(state: dict) -> str:
-    """Check if the execution agent logged any errors."""
-    if state.get("api_error_log") and len(state.get("api_error_log", [])) > 0:
-        return "error"
-    return "success"
+    errors = state.get("api_error_log", [])
+    if not errors:
+        return "success" 
+    if errors == ["SKIP"]:
+        return "success"
+    return "error"
 
 def hitl_interrupt_node(state: CampaignState) -> dict:
     # This node doesn't do much; the magic happens because LangGraph pauses BEFORE it.

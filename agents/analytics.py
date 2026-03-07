@@ -26,7 +26,16 @@ def analytics_node(state: CampaignState) -> dict:
     reports = state.get("performance_reports", [])
     
     # Strip down the data to fit perfectly in the prompt
-    perf_data = [{"variant": r.variant_id, "score": r.composite_score} for r in reports]
+    perf_data = [
+        {
+            "variant_id": r.variant_id,
+            "segment_id": r.segment_id,
+            "click_rate": round(r.click_rate * 100, 1),
+            "open_rate": round(r.open_rate * 100, 1),
+            "composite_score": round(r.composite_score, 4)
+        }
+        for r in reports
+    ]
     
     prompt = f"""
     You are a marketing analytics AI for SuperBFSI.

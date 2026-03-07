@@ -1,6 +1,7 @@
 import random
 from models import CampaignState, PerformanceReport
 from tools.discovery import get_loaded_tools
+from datetime import datetime, timezone
 
 def metrics_fetcher_node(state: CampaignState) -> dict:
     print("🤖 Agent: Fetching performance metrics...")
@@ -36,7 +37,8 @@ def metrics_fetcher_node(state: CampaignState) -> dict:
                 open_rate=open_rate,
                 click_rate=click_rate,
                 composite_score=composite,
-                fetched_at="2026-03-05T12:00:00Z"
+                # FIX 5: Dynamic ISO timestamps
+                fetched_at=datetime.now(timezone.utc).isoformat() 
             ))
             
             print(f"  -> Metrics for {variant.variant_id}: Open={open_rate*100:.1f}%, Click={click_rate*100:.1f}%, Score={composite:.3f}")
