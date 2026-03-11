@@ -6,7 +6,7 @@ from agents.brief_parser import brief_parser_node
 from agents.profiler import customer_profiling_node
 from agents.strategy import strategy_node
 from agents.creative import creative_node
-from agents.executor import execution_node
+from agents.executor import execution_node, final_send_node
 from agents.metrics import metrics_fetcher_node
 from agents.analytics import analytics_node
 from agents.error_handler import error_correction_node
@@ -25,7 +25,8 @@ def route_after_analysis(state: CampaignState) -> str:
     max_iter = state.get("max_iterations", 3)
     if state.get("should_continue_optimization", False) and iteration < max_iter:
         return "optimize"
-    return "complete"
+    # Optimization is done — send winning variants to ALL customers
+    return "final_send"
 
 def route_on_api_error(state: dict) -> str:
     errors = state.get("api_error_log", [])
@@ -59,6 +60,7 @@ def build_campaign_graph():
     builder.add_node("fetch_metrics", metrics_fetcher_node)
     builder.add_node("analyze_optimize", analytics_node)
     builder.add_node("error_correction", error_correction_node)
+    builder.add_node("final_send", final_send_node)
 
     # Entry point
     builder.set_entry_point("load_tools")
@@ -95,15 +97,18 @@ def build_campaign_graph():
     # Post-execution
     builder.add_edge("fetch_metrics", "analyze_optimize")
 
-    # Optimization loop conditional
+    # Optimization loop conditional — "final_send" replaces direct END
     builder.add_conditional_edges(
         "analyze_optimize",
         route_after_analysis,
         {
             "optimize": "plan_strategy", 
-            "complete": END,
+            "final_send": "final_send",
         }
     )
+    
+    # After final winner-take-all send, we're done
+    builder.add_edge("final_send", END)
 
     # Compile with checkpointer for HITL
     memory = MemorySaver()

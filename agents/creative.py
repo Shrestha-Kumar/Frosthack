@@ -103,9 +103,18 @@ def creative_node(state: CampaignState) -> dict:
         VARIANT STRATEGY INSTRUCTIONS:
         - Tone: {variant.tone}
         - Emojis allowed in body: {variant.has_emoji} (Positions: {variant.emoji_positions})
-        - Elements to Bold: {variant.bold_elements}
-        - Elements to Italicize: {variant.italic_elements}
+        - Phrases to Bold (wrap in <strong> tags): {variant.bold_elements}
+        - Phrases to Italicize (wrap in <em> tags): {variant.italic_elements}
         - URL Placement: {variant.url_position}
+        
+        CRITICAL — BOLD & ITALIC USAGE:
+        - The bold_elements and italic_elements above are actual phrases to use.
+        - Write them NATURALLY inside a sentence, wrapped in the appropriate tag.
+        - If any element looks like a placeholder or label (e.g. "CTA", "benefits",
+          "headline", "strategy_explanation"), do NOT write it literally.
+          Instead, write a real customer-facing phrase that matches that concept.
+        - WRONG: "<strong>CTA</strong> and start today" or "<em>strategy_explanation</em>"
+        - CORRECT: "<strong>Start your wealth journey today</strong>"
 
         OUTPUT FORMAT:
         You MUST return the output as a valid JSON object matching this exact structure, with no markdown formatting or extra text:

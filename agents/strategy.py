@@ -89,6 +89,17 @@ def strategy_node(state: CampaignState) -> dict:
           The two variants must NOT share the same primary tone word.
         - CTA URL must be included in both.
         - Seniors should have minimal to no emojis. Working age can have 1-2.
+        
+        BOLD & ITALIC ELEMENTS — CRITICAL:
+        - bold_elements and italic_elements MUST be actual customer-facing phrases
+          that will appear VERBATIM inside <strong> or <em> tags in the email.
+        - They must be real marketing copy a customer would read — NOT abstract
+          labels, category names, or internal jargon.
+        - WRONG: ["benefits", "CTA", "headline", "strategy_explanation", "peer_level"]
+        - WRONG: ["wealth_preservation", "tax_efficiency", "capital_safety"]
+        - CORRECT: ["1% higher assured returns", "DICGC-insured safety"]
+        - CORRECT: ["Start your wealth journey today", "Section 80TTB tax benefit"]
+        - Each element should be 2-8 words of compelling marketing copy.
         {feedback_instruction}
         
         Return the structured plan.

@@ -9,6 +9,7 @@ class CustomerProfile(BaseModel):
     status: str
     employment: Optional[str] = None
     location: Optional[str] = None
+    full_name: Optional[str] = None
     # Rich fields from live API for better segmentation
     monthly_income: Optional[int] = None
     credit_score: Optional[int] = None
@@ -90,6 +91,8 @@ class CampaignState(TypedDict):
     max_iterations: int 
     optimization_history: Annotated[List[OptimizationRecord], operator.add]
     should_continue_optimization: bool
+    # Per-segment best variant IDs for winner-take-all final send
+    best_variant_ids: dict
     openapi_spec: Optional[dict]
     discovered_tools: List[ToolDefinition]
     api_error_log: List[str]

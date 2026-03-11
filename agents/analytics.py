@@ -85,13 +85,19 @@ def analytics_node(state: CampaignState) -> dict:
     You are a marketing analytics AI for SuperBFSI.
     We just completed Iteration {iteration} of our A/B test.
     
+    CRITICAL CONTEXT: The hackathon scores us on TOTAL 'EC=Y' + 'EO=Y' count
+    across ALL 1000 customers. The winning variant per segment will be sent
+    to ALL customers in that segment on the final iteration (winner-take-all).
+    So picking the right winner PER SEGMENT is critical for maximizing score.
+    
     Evaluation Formula: composite_score = (0.7 * click_rate) + (0.3 * open_rate)
     
     Performance data GROUPED BY SEGMENT (compare v1 vs v2 WITHIN each segment):
     {per_segment_data}
     
     Analyze the results:
-    1. For EACH segment, identify which variant (v1 or v2) won by composite_score.
+    1. For EACH segment, identify which variant won by composite_score.
+       Use the FULL variant_id (e.g. "seg_young_adults_v2", NOT just "v2").
     2. For EACH segment, write a SPECIFIC insight about WHY that variant won —
        reference the tone, emoji usage, subject line preview, and bold elements.
        Do NOT just say "higher click rate." Explain what EMAIL CHARACTERISTIC
@@ -173,8 +179,53 @@ def analytics_node(state: CampaignState) -> dict:
     print(f"  -> Losing tones (filtered): {losing_tones}")
     print(f"  -> Should Continue: {should_continue}")
     
+    # --- BUILD BEST VARIANT MAP (ACCUMULATE) ---
+    # Carry forward winners from previous iterations, then update with
+    # this iteration's results. Since best_variant_ids has no reducer
+    # (overwrites), we must merge manually to avoid losing previous winners.
+    best_variant_ids = dict(state.get("best_variant_ids", {}))
+    
+    # Build a set of all valid full variant IDs for normalization
+    valid_variant_ids = {v.variant_id for v in state.get("current_variants", [])}
+    
+    # Update with this iteration's per-segment winners from the LLM
+    for sa in decision.segment_analyses:
+        winner_id = sa.winning_variant
+        
+        # Normalize short-form IDs (e.g. "v2") to full IDs (e.g. "seg_young_adults_v2")
+        if winner_id not in valid_variant_ids:
+            # Try to reconstruct: segment_id + "_" + winner_id
+            candidate = f"{sa.segment_id}_{winner_id}"
+            if candidate in valid_variant_ids:
+                print(f"  -> Normalized variant ID: '{winner_id}' → '{candidate}'")
+                winner_id = candidate
+            else:
+                # Try matching by suffix (e.g. "v2" matches "seg_young_adults_v2")
+                matches = [vid for vid in valid_variant_ids if vid.endswith(f"_{winner_id}") and vid.startswith(sa.segment_id)]
+                if matches:
+                    winner_id = matches[0]
+                    print(f"  -> Normalized variant ID: '{sa.winning_variant}' → '{winner_id}'")
+                else:
+                    print(f"  -> ⚠️  Could not normalize variant ID '{winner_id}' for {sa.segment_id}")
+        
+        best_variant_ids[sa.segment_id] = winner_id
+    
+    # ENSURE every active segment has a winner — even if the LLM didn't
+    # produce a segment_analysis for it (e.g. identical mock scores).
+    # Default to v1 for any segment without an explicit winner.
+    for seg in state.get("active_segments", []):
+        if seg.segment_id not in best_variant_ids:
+            # Pick the first variant for this segment as default winner
+            seg_variants = [v for v in state.get("current_variants", []) if v.segment_id == seg.segment_id]
+            if seg_variants:
+                best_variant_ids[seg.segment_id] = seg_variants[0].variant_id
+                print(f"  -> Default winner for {seg.segment_id}: {seg_variants[0].variant_id} (no LLM analysis)")
+    
+    print(f"  -> Best variant map for winner-take-all: {best_variant_ids}")
+    
     return {
         "optimization_history": [opt_record],
         "should_continue_optimization": should_continue,
-        "iteration_count": iteration + 1
+        "iteration_count": iteration + 1,
+        "best_variant_ids": best_variant_ids
     }

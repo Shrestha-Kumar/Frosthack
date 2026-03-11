@@ -123,6 +123,7 @@ def run_graph_until_interrupt(graph, config, brief):
             # Initialize all fields that need non-None defaults
             "api_retry_count": 0,
             "campaign_variant_map": {},
+            "best_variant_ids": {},
             "approved_variants": [],
             "messages": [],
             "api_error_log": [],

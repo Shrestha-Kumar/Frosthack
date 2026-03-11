@@ -1,7 +1,33 @@
+import os
 from models import CampaignState
 from tools.discovery import get_loaded_tools
 from datetime import datetime, timedelta
 from collections import defaultdict
+
+def _parse_send_time(raw_time: str) -> str:
+    """Parse recommended_send_time like '10:00 AM IST' into 24h HH:MM format."""
+    try:
+        time_parts = raw_time.split(" ")
+        time_str = time_parts[0]
+        
+        if "PM" in raw_time and not time_str.startswith("12"):
+            h, m = time_str.split(":")
+            time_str = f"{int(h)+12:02d}:{m}"
+        elif "AM" in raw_time and time_str.startswith("12"):
+            time_str = f"00:{time_str.split(':')[1]}"
+        return time_str
+    except Exception:
+        return "10:00"  # safe default: 10 AM
+
+def _format_send_time(time_str: str) -> str:
+    """
+    Build the send_time string in API format 'DD:MM:YY HH:MM:SS'.
+    Uses a near-future time to ensure the API accepts it.
+    """
+    # Schedule 2 hours from now to give the API a valid future time
+    # This avoids timezone edge cases and "must be future" rejections
+    future = datetime.now() + timedelta(hours=2)
+    return f"{future.strftime('%d:%m:%y')} {time_str}:00"
 
 def execution_node(state: CampaignState) -> dict:
     print("🤖 Agent: Executing campaigns (scheduling)...")
@@ -12,20 +38,11 @@ def execution_node(state: CampaignState) -> dict:
     if not send_tool:
         raise ValueError("Send Campaign tool not found! Did discovery run?")
         
-    # DO NOT read from state — scheduled_campaign_ids uses operator.add reducer,
-    # so LangGraph will merge our return with existing state automatically.
-    # Reading + appending + returning would cause double-accumulation.
     new_campaign_ids = []
-    
-    # Always start with an empty error list so old errors are wiped out
     current_errors = []
-    # Track campaign_id -> variant_id mapping for safe metric attribution
     campaign_map = {}
     
-    # --- A/B Test Customer Splitting ---
-    # Group variants by segment so we can split each segment's customers 50/50.
-    # Without this split, both variants go to the SAME customers and the API
-    # returns identical deterministic EO/EC values, making A/B testing meaningless.
+    # Group variants by segment
     segment_variants = defaultdict(list)
     for variant in state.get("current_variants", []):
         segment_variants[variant.segment_id].append(variant)
@@ -35,37 +52,30 @@ def execution_node(state: CampaignState) -> dict:
         if not variants_for_seg:
             continue
         
-        # Split customer list for A/B testing
         customer_ids = segment.customer_ids
+        time_str = _parse_send_time(segment.recommended_send_time)
+        
+        # ALWAYS A/B SPLIT during optimization iterations.
+        # Winner-take-all is handled ONLY by final_send_node after analytics finishes.
         midpoint = len(customer_ids) // 2
-        
-        # If only 1 variant (shouldn't happen, but safe), give it all customers
         if len(variants_for_seg) == 1:
-            splits = [customer_ids]
+            variants_to_send = [(variants_for_seg[0], customer_ids)]
         else:
-            # v1 gets first half, v2 gets second half
-            splits = [customer_ids[:midpoint], customer_ids[midpoint:]]
+            variants_to_send = [
+                (variants_for_seg[0], customer_ids[:midpoint]),
+                (variants_for_seg[1], customer_ids[midpoint:])
+            ]
         
-        for idx, variant in enumerate(variants_for_seg):
-            # Each variant gets its own split of the customer list
-            target_customers = splits[min(idx, len(splits) - 1)]
+        for variant, target_customers in variants_to_send:
+            # --- PERSONALIZATION ---
+            # Inject customer first name into the email body greeting
+            # The API sends individual emails per customer_id, but the body is shared.
+            # We personalize with a generic "Dear [First Name]" approach:
+            # Since the body is the SAME for all customer_ids in one send_campaign call,
+            # we can't do per-customer personalization within a single API call.
+            # But we CAN ensure the email content is maximally relevant.
             
-            # Safe time parsing with a fallback to prevent crashes
-            try:
-                raw_time = segment.recommended_send_time
-                time_parts = raw_time.split(" ")
-                time_str = time_parts[0]
-                
-                if "PM" in raw_time and not time_str.startswith("12"):
-                    h, m = time_str.split(":")
-                    time_str = f"{int(h)+12:02d}:{m}"
-                elif "AM" in raw_time and time_str.startswith("12"):
-                    time_str = f"00:{time_str.split(':')[1]}"
-            except Exception:
-                time_str = "10:00"  # safe default: 10 AM
-
-            tomorrow = datetime.now() + timedelta(days=1)
-            formatted_send_time = f"{tomorrow.strftime('%d:%m:%y')} {time_str}:00"
+            formatted_send_time = _format_send_time(time_str)
 
             payload = {
                 "subject": variant.subject,
@@ -75,29 +85,97 @@ def execution_node(state: CampaignState) -> dict:
             }
             
             try:
-                # Fire the tool!
                 response = send_tool.invoke(payload)
                 
                 if "campaign_id" in response:
                     camp_id = response["campaign_id"]
                     new_campaign_ids.append(camp_id)
-                    campaign_map[camp_id] = variant.variant_id  # Store mapping
-                    print(f"  -> Scheduled Campaign {camp_id} for Variant {variant.variant_id} ({len(target_customers)} customers)")
+                    campaign_map[camp_id] = variant.variant_id
+                    print(f"  -> [A/B] Campaign {camp_id} for {variant.variant_id} ({len(target_customers)} customers)")
                 else:
-                    # The tool returned an error dictionary from the mock API
                     error_msg = f"API Error for Variant {variant.variant_id}: {response}"
                     print(f"  -> {error_msg}")
                     current_errors.append(error_msg)
                     
             except Exception as e:
-                # Catch any hard crashes (like network disconnections)
                 error_msg = f"System Error for Variant {variant.variant_id}: {str(e)}"
                 print(f"  -> {error_msg}")
                 current_errors.append(error_msg)
             
-    # Return only NEW IDs (operator.add in state will merge with existing)
     return {
         "scheduled_campaign_ids": new_campaign_ids,
         "api_error_log": current_errors,
         "campaign_variant_map": campaign_map
+    }
+
+
+def final_send_node(state: CampaignState) -> dict:
+    """
+    Winner-take-all node: runs ONCE after analytics decides optimisation is done.
+    Sends the winning variant to ALL customers in each segment, maximising
+    the EC=Y + EO=Y count for hackathon scoring.
+    """
+    best_variant_ids = state.get("best_variant_ids", {})
+    if not best_variant_ids:
+        print("⚠️  final_send: No best_variant_ids found — skipping winner send.")
+        return {}
+
+    print("🏆 FINAL SEND: Winner-take-all — sending best variant to ALL customers per segment")
+
+    tools = get_loaded_tools()
+    send_tool = next((t for t in tools if "send_campaign" in t.name), None)
+    if not send_tool:
+        raise ValueError("Send Campaign tool not found! Did discovery run?")
+
+    new_campaign_ids = []
+    campaign_map = {}
+
+    # Build a variant lookup from the MOST RECENT current_variants
+    variant_lookup = {}
+    for v in state.get("current_variants", []):
+        variant_lookup[v.variant_id] = v
+
+    for segment in state.get("active_segments", []):
+        best_vid = best_variant_ids.get(segment.segment_id)
+        
+        # Fallback chain: best_variant_ids → first variant for this segment
+        winner = None
+        if best_vid:
+            winner = variant_lookup.get(best_vid)
+        
+        if not winner:
+            # No winner ID or winner not in current variants — pick first available
+            candidates = [v for v in state.get("current_variants", []) if v.segment_id == segment.segment_id]
+            if candidates:
+                winner = candidates[0]
+                print(f"  -> ⚠️  Fallback for {segment.segment_id}: using {winner.variant_id} (best_vid was {best_vid})")
+            else:
+                print(f"  -> ⚠️  No variants at all for {segment.segment_id}, skipping")
+                continue
+
+        time_str = _parse_send_time(segment.recommended_send_time)
+        formatted_send_time = _format_send_time(time_str)
+
+        payload = {
+            "subject": winner.subject,
+            "body": winner.body_html,
+            "list_customer_ids": segment.customer_ids,
+            "send_time": formatted_send_time,
+        }
+
+        try:
+            response = send_tool.invoke(payload)
+            if "campaign_id" in response:
+                camp_id = response["campaign_id"]
+                new_campaign_ids.append(camp_id)
+                campaign_map[camp_id] = winner.variant_id
+                print(f"  -> [WINNER] Campaign {camp_id} for {winner.variant_id} ({len(segment.customer_ids)} customers)")
+            else:
+                print(f"  -> API Error for Winner {winner.variant_id}: {response}")
+        except Exception as e:
+            print(f"  -> System Error for Winner {winner.variant_id}: {e}")
+
+    return {
+        "scheduled_campaign_ids": new_campaign_ids,
+        "campaign_variant_map": campaign_map,
     }

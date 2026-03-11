@@ -41,6 +41,7 @@ def _map_api_customer(c: dict) -> CustomerProfile:
         status="active" if c.get("Existing Customer", "Y") == "Y" else "inactive",
         employment=c.get("Occupation", "unknown"),
         location=c.get("City", "India"),
+        full_name=c.get("Full_name"),
         # Map the rich fields the API provides
         monthly_income=c.get("Monthly_Income"),
         credit_score=c.get("Credit score"),
@@ -142,10 +143,12 @@ def customer_profiling_node(state: CampaignState) -> dict:
     # Check if we are in mock mode to use our 50 dummy users
     is_mock_mode = os.getenv("MOCK_MODE", "false").lower() == "true"
     
+    use_cache = os.getenv("USE_CACHE", "true").lower() == "true"
+    
     if is_mock_mode:
         full_cohort = _generate_dummy_cohort()
         print(f"✅ Generated {len(full_cohort)} realistic dummy customers for testing.")
-    elif os.path.exists(CACHE_PATH):
+    elif use_cache and os.path.exists(CACHE_PATH):
         # Load from local cache to save API hits (100/day limit)
         with open(CACHE_PATH) as f:
             cached = json.load(f)

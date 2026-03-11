@@ -1,4 +1,33 @@
+# Environment
 .env
+
+# Python
 __pycache__/
-data/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Cache & runtime data
 customer_cohort_cache.json
+campaignx_threads.db
+data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Frontend (handled by frontend/.gitignore)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Logs
+*.log
