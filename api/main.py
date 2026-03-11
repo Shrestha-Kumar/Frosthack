@@ -20,6 +20,7 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 import uuid
 import time
+import sqlite3
 from graph import build_campaign_graph
 from langfuse.langchain import CallbackHandler
 
@@ -27,11 +28,64 @@ langfuse_handler = CallbackHandler()
 
 from fastapi.middleware.cors import CORSMiddleware
 
+DB_PATH = "campaignx_threads.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS threads (
+            thread_id TEXT PRIMARY KEY,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            status TEXT DEFAULT 'running'
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def save_thread(thread_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "INSERT OR IGNORE INTO threads (thread_id) VALUES (?)",
+        (thread_id,)
+    )
+    conn.commit()
+    conn.close()
+
+def update_thread_status(thread_id: str, status: str):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        "UPDATE threads SET status=? WHERE thread_id=?",
+        (status, thread_id)
+    )
+    conn.commit()
+    conn.close()
+
+def recover_graph_if_needed(thread_id: str) -> bool:
+    """
+    If thread_id is known in DB but not in active_graphs
+    (e.g. after a server restart), rebuild the graph object.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute(
+        "SELECT thread_id FROM threads WHERE thread_id=?",
+        (thread_id,)
+    ).fetchone()
+    conn.close()
+
+    if row and thread_id not in active_graphs:
+        graph = build_campaign_graph()
+        active_graphs[thread_id] = graph
+        print(f"  -> Recovered graph for thread {thread_id} after restart.")
+        return True
+    return False
+
 app = FastAPI(
     title="CampaignX Backend",
     openapi_url="/openapi.json", 
     docs_url="/docs"
 )
+
+init_db()
 
 # Add this CORS middleware block so Lovable can connect!
 app.add_middleware(
@@ -61,7 +115,18 @@ def run_graph_until_interrupt(graph, config, brief):
     config["callbacks"] = [langfuse_handler]
     
     graph.invoke(
-        {"raw_brief": brief, "max_iterations": 3, "should_continue_optimization": False},
+        {
+            "raw_brief": brief,
+            "max_iterations": 3,
+            "should_continue_optimization": False,
+            "iteration_count": 0,
+            # Initialize all fields that need non-None defaults
+            "api_retry_count": 0,
+            "campaign_variant_map": {},
+            "approved_variants": [],
+            "messages": [],
+            "api_error_log": [],
+        },
         config=config
     )
 
@@ -75,12 +140,14 @@ async def start_campaign(req: CampaignStartRequest, background_tasks: Background
     thread_id = f"camp_{int(time.time())}"
     graph = build_campaign_graph()
     active_graphs[thread_id] = graph
+    save_thread(thread_id)
     config = {"configurable": {"thread_id": thread_id}}
     background_tasks.add_task(run_graph_until_interrupt, graph, config, req.brief)
     return {"thread_id": thread_id, "status": "started"}
 
 @app.get("/campaign/{thread_id}/state")
 async def get_campaign_state(thread_id: str):
+    recover_graph_if_needed(thread_id)
     if thread_id not in active_graphs:
         raise HTTPException(status_code=404, detail="Thread not found")
     
@@ -109,6 +176,7 @@ async def get_campaign_state(thread_id: str):
     
 @app.post("/campaign/{thread_id}/approve")
 async def approve_campaign(thread_id: str, background_tasks: BackgroundTasks):
+    recover_graph_if_needed(thread_id)
     if thread_id not in active_graphs:
         raise HTTPException(status_code=404, detail="Thread not found")
     
@@ -124,6 +192,7 @@ async def approve_campaign(thread_id: str, background_tasks: BackgroundTasks):
 
 @app.post("/campaign/{thread_id}/reject")
 async def reject_campaign(thread_id: str, req: RejectRequest, background_tasks: BackgroundTasks):
+    recover_graph_if_needed(thread_id)
     if thread_id not in active_graphs:
         raise HTTPException(status_code=404, detail="Thread not found")
     

@@ -13,8 +13,10 @@ def execution_node(state: CampaignState) -> dict:
         
     scheduled_ids = state.get("scheduled_campaign_ids", [])
     
-    # THE FIX: Always start with an empty error list so old errors are wiped out!
+    # Always start with an empty error list so old errors are wiped out
     current_errors = []
+    # Track campaign_id -> variant_id mapping for safe metric attribution
+    campaign_map = {}
     
     # Iterate through our generated variants and "send" them
     for variant in state.get("current_variants", []):
@@ -23,7 +25,7 @@ def execution_node(state: CampaignState) -> dict:
         if not segment:
             continue
             
-        # FIX 6: Safe time parsing with a fallback to prevent crashes
+        # Safe time parsing with a fallback to prevent crashes
         try:
             raw_time = segment.recommended_send_time
             time_parts = raw_time.split(" ")
@@ -52,8 +54,10 @@ def execution_node(state: CampaignState) -> dict:
             response = send_tool.invoke(payload)
             
             if "campaign_id" in response:
-                scheduled_ids.append(response["campaign_id"])
-                print(f"  -> Scheduled Campaign {response['campaign_id']} for Variant {variant.variant_id}")
+                camp_id = response["campaign_id"]
+                scheduled_ids.append(camp_id)
+                campaign_map[camp_id] = variant.variant_id  # Store mapping
+                print(f"  -> Scheduled Campaign {camp_id} for Variant {variant.variant_id}")
             else:
                 # The tool returned an error dictionary from the mock API
                 error_msg = f"API Error for Variant {variant.variant_id}: {response}"
@@ -66,8 +70,9 @@ def execution_node(state: CampaignState) -> dict:
             print(f"  -> {error_msg}")
             current_errors.append(error_msg)
             
-    # Return BOTH the successful IDs and the error log so the LangGraph can route appropriately
+    # Return successful IDs, error log, and variant mapping
     return {
         "scheduled_campaign_ids": scheduled_ids,
-        "api_error_log": current_errors
+        "api_error_log": current_errors,
+        "campaign_variant_map": campaign_map
     }

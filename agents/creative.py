@@ -7,6 +7,12 @@ class GeneratedCopy(BaseModel):
     subject: str
     body_html: str
 
+BANNED_WORDS = [
+    "free", "guarantee", "act now", "limited time",
+    "click here", "buy now", "urgent", "expires today",
+    "don't miss", "last chance"
+]
+
 llm = ChatGroq(
     model="llama-3.3-70b-versatile", 
     temperature=0.4, # Higher temperature for copywriting creativity
@@ -61,8 +67,30 @@ def creative_node(state: CampaignState) -> dict:
         """
         
         copy = structured_llm.invoke(prompt)
-        
-        # Update the variant with the generated content
+
+        # POST-GENERATION VALIDATION
+        # Check both subject and body for banned words (case-insensitive)
+        combined_text = (copy.subject + " " + copy.body_html).lower()
+        violations = [word for word in BANNED_WORDS if word in combined_text]
+
+        if violations:
+            print(f"  -> ⚠️  Content violation in {variant.variant_id}: {violations}. Regenerating...")
+            stricter_prompt = prompt + f"""
+
+            CRITICAL CORRECTION REQUIRED:
+            Your previous response contained these banned words/phrases: {violations}
+            These are STRICTLY PROHIBITED in BFSI email marketing.
+            Regenerate the email without any of these words.
+            Use professional alternatives:
+            - Instead of "Limited time" use "Available now"
+            - Instead of "Act now" use "Start today"
+            - Instead of "Guarantee" use "assured returns" or "DICGC-insured"
+            - Instead of "Free" use "complimentary" or remove entirely
+            """
+            copy = structured_llm.invoke(stricter_prompt)
+            print(f"  -> Regenerated {variant.variant_id} after violation correction.")
+
+        # Update the variant with the validated content
         variant.subject = copy.subject
         variant.body_html = copy.body_html
         completed_variants.append(variant)

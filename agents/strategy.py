@@ -39,16 +39,34 @@ def strategy_node(state: CampaignState) -> dict:
     if feedback and state.get("hitl_status") == "rejected":
         feedback_instruction = f"\n        CRITICAL HUMAN FEEDBACK FROM PREVIOUS RUN (MUST FOLLOW STRICTLY):\n        \"{feedback}\"\n        Adjust your strategy to explicitly satisfy this feedback."
     
-    # FIX 4: Optimization loop memory
+    # Optimization loop memory with structured fields
     history = state.get("optimization_history", [])
     history_context = ""
     if history:
         last = history[-1]
+        # Use structured fields for specific actionable guidance
+        winning_tones = getattr(last, 'winning_tones', [])
+        losing_tones = getattr(last, 'losing_tones', [])
+        winning_elements = getattr(last, 'winning_elements', [])
+
         history_context = f"""
-        PREVIOUS ITERATION INSIGHT (MUST BUILD ON THIS):
-        Insight: {last.insight}
-        Action taken: {last.action_taken}
-        Segments to improve: {last.segments_retargeted}
+        PREVIOUS ITERATION RESULT — BUILD ON THIS SPECIFICALLY:
+        General insight: {last.insight}
+
+        What worked (use these as your Variant 1 baseline):
+          - Winning tones: {winning_tones}
+          - Winning email elements: {winning_elements}
+
+        What failed (do NOT repeat in Variant 2):
+          - Losing tones: {losing_tones}
+
+        Segments that need improvement: {last.segments_retargeted}
+
+        MANDATORY RULES FOR THIS ITERATION:
+        - Variant 1 must use one of the winning tones listed above.
+        - Variant 2 must test a completely different angle from what failed.
+        - Do NOT generate the same tone pair as the previous iteration.
+        - Be specific about what element you are testing differently.
         """
 
     for segment in state.get("active_segments", []):
@@ -66,7 +84,7 @@ def strategy_node(state: CampaignState) -> dict:
         CRITICAL RULES:
         - Generate exactly 2 variant strategies for this segment.
         - Variant 1 should be a safe, standard approach based on the recommended tone.
-        - Variant 2 should test a slightly different angle (e.g., more urgency, different formatting).
+        - Variant 2 should test a specifically different angle from Variant 1.
         - CTA URL must be included in both.
         - Seniors should have minimal to no emojis. Working age can have 1-2.
         {feedback_instruction}

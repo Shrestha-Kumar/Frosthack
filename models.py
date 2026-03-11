@@ -1,5 +1,5 @@
 from typing import TypedDict, List, Optional, Literal, Annotated
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import operator
 
 class CustomerProfile(BaseModel):
@@ -9,6 +9,10 @@ class CustomerProfile(BaseModel):
     status: str
     employment: Optional[str] = None
     location: Optional[str] = None
+    # Rich fields from live API for better segmentation
+    monthly_income: Optional[int] = None
+    credit_score: Optional[int] = None
+    app_installed: Optional[str] = None
 
 class MicroSegment(BaseModel):
     segment_id: str
@@ -47,6 +51,10 @@ class OptimizationRecord(BaseModel):
     action_taken: str
     variants_changed: List[str]
     segments_retargeted: List[str]
+    # Structured fields for machine-readable strategy guidance
+    winning_tones: List[str] = Field(default_factory=list)
+    losing_tones: List[str] = Field(default_factory=list)
+    winning_elements: List[str] = Field(default_factory=list)
 
 class ParsedBrief(BaseModel):
     product_name: str
@@ -73,6 +81,8 @@ class CampaignState(TypedDict):
     current_variants: List[EmailVariant]
     approved_variants: List[EmailVariant]
     scheduled_campaign_ids: Annotated[List[str], operator.add]
+    # ID-based mapping for safe metric attribution
+    campaign_variant_map: dict
     performance_reports: Annotated[List[PerformanceReport], operator.add]
     hitl_status: Literal["not_started", "pending", "approved", "rejected"]
     hitl_feedback: Optional[str]
@@ -83,4 +93,7 @@ class CampaignState(TypedDict):
     openapi_spec: Optional[dict]
     discovered_tools: List[ToolDefinition]
     api_error_log: List[str]
-    messages: Annotated[List[dict], operator.add]
+    # Retry counter to prevent infinite error loop
+    api_retry_count: int
+    # Removed operator.add accumulator from messages to prevent bloat
+    messages: List[dict]

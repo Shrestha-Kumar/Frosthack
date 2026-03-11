@@ -1,5 +1,6 @@
 import os
 import json
+import time
 from typing import List, Optional, Dict
 import httpx
 from pydantic import BaseModel, create_model
@@ -104,20 +105,62 @@ def create_api_tool_from_operation(
             "Content-Type": "application/json"
         }
 
-        try:
-            if method.lower() == "get":
-                response = httpx.get(url, params=validated.model_dump(exclude_none=True), headers=headers)
-            elif method.lower() == "post":
-                response = httpx.post(url, json=validated.model_dump(exclude_none=True), headers=headers)
-            else:
-                response = httpx.request(method.upper(), url, json=validated.model_dump(exclude_none=True), headers=headers)
-            
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            return {"error": f"API call failed with status {e.response.status_code}", "details": e.response.text}
-        except Exception as e:
-            return {"error": str(e)}
+        # Retry up to 3 times with exponential backoff
+        # Timeout of 30 seconds per attempt
+        max_attempts = 3
+        last_error = None
+
+        for attempt in range(max_attempts):
+            try:
+                if method.lower() == "get":
+                    response = httpx.get(
+                        url,
+                        params=validated.model_dump(exclude_none=True),
+                        headers=headers,
+                        timeout=30.0
+                    )
+                elif method.lower() == "post":
+                    response = httpx.post(
+                        url,
+                        json=validated.model_dump(exclude_none=True),
+                        headers=headers,
+                        timeout=30.0
+                    )
+                else:
+                    response = httpx.request(
+                        method.upper(),
+                        url,
+                        json=validated.model_dump(exclude_none=True),
+                        headers=headers,
+                        timeout=30.0
+                    )
+
+                response.raise_for_status()
+                return response.json()
+
+            except httpx.TimeoutException as e:
+                last_error = f"Timeout on attempt {attempt + 1}: {str(e)}"
+                print(f"  -> API timeout (attempt {attempt + 1}/{max_attempts}). Retrying...")
+                time.sleep(2 ** attempt)  # Exponential backoff: 1s, 2s, 4s
+
+            except httpx.HTTPStatusError as e:
+                # Don't retry on 4xx (client errors) — only on 5xx (server errors)
+                if e.response.status_code < 500:
+                    return {
+                        "error": f"Client error {e.response.status_code}",
+                        "details": e.response.text
+                    }
+                last_error = f"Server error {e.response.status_code} on attempt {attempt + 1}"
+                print(f"  -> Server error (attempt {attempt + 1}/{max_attempts}). Retrying...")
+                time.sleep(2 ** attempt)
+
+            except Exception as e:
+                last_error = str(e)
+                print(f"  -> Unexpected error (attempt {attempt + 1}/{max_attempts}): {e}")
+                time.sleep(2 ** attempt)
+
+        # All retries exhausted
+        return {"error": f"All {max_attempts} attempts failed. Last error: {last_error}"}
 
     return StructuredTool(
         name=operation_id,

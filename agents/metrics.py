@@ -3,6 +3,27 @@ from models import CampaignState, PerformanceReport
 from tools.discovery import get_loaded_tools
 from datetime import datetime, timezone
 
+def _compute_rates_from_report(response: dict) -> tuple:
+    """
+    The CampaignX report API returns per-customer rows with EO (Email Opened)
+    and EC (Email Clicked) as 'Y'/'N' strings. There are NO aggregate
+    open_rate/click_rate fields. We must compute them ourselves.
+
+    Returns (open_rate, click_rate) as floats between 0 and 1.
+    """
+    report_rows = response.get("data", [])
+    total = response.get("total_rows", len(report_rows))
+
+    if total == 0 or not report_rows:
+        return (0.0, 0.0)
+
+    opened = sum(1 for row in report_rows if row.get("EO") == "Y")
+    clicked = sum(1 for row in report_rows if row.get("EC") == "Y")
+
+    open_rate = opened / total
+    click_rate = clicked / total
+    return (round(open_rate, 4), round(click_rate, 4))
+
 def metrics_fetcher_node(state: CampaignState) -> dict:
     print("🤖 Agent: Fetching performance metrics...")
     tools = get_loaded_tools()
@@ -13,23 +34,24 @@ def metrics_fetcher_node(state: CampaignState) -> dict:
         
     reports = []
     variants = state.get("current_variants", [])
-    
-    for i, camp_id in enumerate(state.get("scheduled_campaign_ids", [])):
-        # Call the actual mock endpoint
-        # Call the actual mock endpoint
+    campaign_map = state.get("campaign_variant_map", {})
+
+    for camp_id in state.get("scheduled_campaign_ids", []):
         response = report_tool.invoke({"campaign_id": camp_id})
-        
-        # Extract REAL metrics from the API response, fallback to mock data only if missing
-        open_rate = response.get("open_rate", round(random.uniform(0.15, 0.45), 3))
-        click_rate = response.get("click_rate", round(random.uniform(0.02, 0.18), 3))
+
+        # The report API returns per-customer EO/EC rows, not aggregate rates.
+        # Compute open_rate and click_rate from the raw row data.
+        open_rate, click_rate = _compute_rates_from_report(response)
         
         # The exact hackathon evaluation formula
         composite = (0.7 * click_rate) + (0.3 * open_rate)
         
-        # Match metrics back to the specific variant
-        variant = variants[i] if i < len(variants) else None
+        # ID-based lookup instead of fragile index position
+        variant_id = campaign_map.get(camp_id)
+        variant = next((v for v in variants if v.variant_id == variant_id), None)
         
         if variant:
+            total_rows = response.get("total_rows", 0)
             reports.append(PerformanceReport(
                 campaign_id=camp_id,
                 variant_id=variant.variant_id,
@@ -37,10 +59,11 @@ def metrics_fetcher_node(state: CampaignState) -> dict:
                 open_rate=open_rate,
                 click_rate=click_rate,
                 composite_score=composite,
-                # FIX 5: Dynamic ISO timestamps
                 fetched_at=datetime.now(timezone.utc).isoformat() 
             ))
             
-            print(f"  -> Metrics for {variant.variant_id}: Open={open_rate*100:.1f}%, Click={click_rate*100:.1f}%, Score={composite:.3f}")
+            print(f"  -> Metrics for {variant.variant_id}: Open={open_rate*100:.1f}%, Click={click_rate*100:.1f}%, Score={composite:.4f} (n={total_rows})")
+        else:
+            print(f"  -> WARNING: No variant found for campaign_id {camp_id}. Skipping.")
         
     return {"performance_reports": reports}
