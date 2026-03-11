@@ -1,8 +1,11 @@
 import os
+import json
 import random
 from typing import List
 from models import CampaignState, CustomerProfile, MicroSegment
 from tools.discovery import get_loaded_tools
+
+CACHE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "customer_cohort_cache.json")
 
 def _generate_dummy_cohort() -> List[CustomerProfile]:
     random.seed(42)
@@ -142,6 +145,13 @@ def customer_profiling_node(state: CampaignState) -> dict:
     if is_mock_mode:
         full_cohort = _generate_dummy_cohort()
         print(f"✅ Generated {len(full_cohort)} realistic dummy customers for testing.")
+    elif os.path.exists(CACHE_PATH):
+        # Load from local cache to save API hits (100/day limit)
+        with open(CACHE_PATH) as f:
+            cached = json.load(f)
+        raw_customers = cached.get("data", [])
+        full_cohort = [_map_api_customer(c) for c in raw_customers]
+        print(f"✅ Loaded {len(full_cohort)} customers from LOCAL CACHE (0 API calls used).")
     else:
         # Real API execution path
         tools = get_loaded_tools()
@@ -153,6 +163,11 @@ def customer_profiling_node(state: CampaignState) -> dict:
         raw_customers = api_response.get("data", [])
         full_cohort = [_map_api_customer(c) for c in raw_customers]
         print(f"✅ Fetched {len(full_cohort)} customers from LIVE API.")
+        
+        # Auto-cache for future runs
+        with open(CACHE_PATH, 'w') as f:
+            json.dump(api_response, f, indent=2)
+        print(f"  -> Cached to {CACHE_PATH} for future runs.")
     
     # Segment them based on the parsed brief
     include_inactive = state["parsed_brief"].include_inactive if state["parsed_brief"] else False
