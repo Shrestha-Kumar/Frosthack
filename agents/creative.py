@@ -1,4 +1,5 @@
 import os
+import re
 from langchain_groq import ChatGroq
 from pydantic import BaseModel
 from models import CampaignState, EmailVariant
@@ -26,8 +27,37 @@ def creative_node(state: CampaignState) -> dict:
     
     completed_variants = []
     parsed_brief = state.get("parsed_brief")
-    product_details = f"{parsed_brief.product_name}: {parsed_brief.base_return_advantage}. Special: {parsed_brief.special_offers}" if parsed_brief else ""
+    product_details = f"{parsed_brief.product_name}: {parsed_brief.base_return_advantage}." if parsed_brief else ""
     cta_url = parsed_brief.cta_url if parsed_brief else "https://superbfsi.com/xdeposit/explore/"
+    
+    # Build segment lookup for segment-specific context in the creative prompt
+    segments_by_id = {seg.segment_id: seg for seg in state.get("active_segments", [])}
+    
+    # Build offer-to-segment relevance mapping
+    # This ensures each segment's email only mentions offers relevant to THAT segment
+    all_offers = parsed_brief.special_offers if parsed_brief else []
+    
+    def _get_relevant_offers(segment_id: str) -> str:
+        """Filter special offers to only those relevant to the target segment."""
+        relevant = []
+        for offer in all_offers:
+            offer_lower = offer.lower()
+            # Senior offers → only for senior segments
+            if any(kw in offer_lower for kw in ["senior", "60+", "80ttb"]):
+                if "senior" in segment_id:
+                    relevant.append(offer)
+            # Youth offers → only for young adults
+            elif any(kw in offer_lower for kw in ["under 25", "first-time", "young", "18-24", "welcome bonus"]):
+                if "young" in segment_id:
+                    relevant.append(offer)
+            # High income offers → high income segment
+            elif any(kw in offer_lower for kw in ["premium", "wealth", "high net worth", "hni"]):
+                if "high_income" in segment_id:
+                    relevant.append(offer)
+            else:
+                # General offers apply to all segments
+                relevant.append(offer)
+        return "; ".join(relevant) if relevant else "Standard product offering"
     
     # Check if this is a regeneration run with human feedback
     feedback = state.get("hitl_feedback")
@@ -36,6 +66,20 @@ def creative_node(state: CampaignState) -> dict:
         feedback_instruction = f"\n        CRITICAL HUMAN FEEDBACK FOR REGENERATION (OVERRIDE PREVIOUS RULES IF CONFLICTING):\n        \"{feedback}\""
     
     for variant in state.get("current_variants", []):
+        # Get segment-specific context
+        segment = segments_by_id.get(variant.segment_id)
+        segment_context = ""
+        if segment:
+            segment_context = f"""
+        TARGET SEGMENT CONTEXT (tailor content specifically to this audience):
+        - Segment: {segment.name}
+        - Key Strategy: {segment.strategy_notes}
+        - Psychological Hook: {segment.psychological_hook}
+        - ONLY mention offers relevant to this segment. Do NOT include offers
+          meant for other age groups or demographics."""
+        
+        relevant_offers = _get_relevant_offers(variant.segment_id)
+        
         prompt = f"""
         You are an expert email copywriter for SuperBFSI, an Indian BFSI company.
         Write the email subject and HTML body for this specific strategy.
@@ -46,10 +90,15 @@ def creative_node(state: CampaignState) -> dict:
         3. NO images, NO attachments, NO external URLs other than the one specified.
         4. BANNED WORDS: Do not use "Free", "FREE", "Guarantee", "Act now", "Limited time", "Click here", "Buy now". Use "guaranteed" or "assured" instead.
         5. Font formatting allowed: <strong>, <em>, <u>. Use them to highlight the requested elements.
+        6. Do NOT duplicate text — never write the same phrase both as plain text AND inside a formatting tag like <strong> or <em>.
+           WRONG: "Control your finances <strong>Control your finances</strong>"
+           CORRECT: "<strong>Control your finances</strong> with our exclusive offer"
         {feedback_instruction}
+        {segment_context}
 
         PRODUCT DETAILS:
         {product_details}
+        Relevant Special Offers for this segment: {relevant_offers}
 
         VARIANT STRATEGY INSTRUCTIONS:
         - Tone: {variant.tone}
@@ -89,6 +138,16 @@ def creative_node(state: CampaignState) -> dict:
             """
             copy = structured_llm.invoke(stricter_prompt)
             print(f"  -> Regenerated {variant.variant_id} after violation correction.")
+
+        # POST-GENERATION: Fix duplicated text around HTML tags
+        # Pattern: "phrase <tag>phrase</tag>" → "<tag>phrase</tag>"
+        # The LLM sometimes writes plain text and then the same text inside a tag
+        body = copy.body_html
+        for tag in ["strong", "em", "u"]:
+            # Match "text <tag>text</tag>" where the text before the tag matches the text inside
+            pattern = rf'(\b[\w\s,.\'-]+?)\s*<{tag}>\1</{tag}>'
+            body = re.sub(pattern, rf'<{tag}>\1</{tag}>', body, flags=re.IGNORECASE)
+        copy.body_html = body
 
         # Update the variant with the validated content
         variant.subject = copy.subject

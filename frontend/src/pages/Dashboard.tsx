@@ -1,22 +1,22 @@
-import { useState, useEffect, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
+import { useToast } from "@/hooks/use-toast";
+import { AnimatePresence, motion } from "framer-motion";
 import {
-    Send,
-    Loader2,
-    CheckCircle2,
-    XCircle,
+    Activity,
     BarChart3,
     Brain,
+    CheckCircle2,
     FileText,
+    Loader2,
+    Mail,
     RefreshCw,
+    Send,
+    Sparkles,
     TrendingUp,
     Users,
-    Mail,
-    Sparkles,
-    Activity,
+    XCircle,
 } from "lucide-react";
-import { useToast } from "@/hooks/use-toast";
+import { useCallback, useEffect, useState } from "react";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 const API = "http://localhost:8000";
 
@@ -32,9 +32,16 @@ interface EmailVariant {
 
 interface PerformanceReport {
     variant_id?: string;
+    segment_id?: string;
     open_rate?: number;
     click_rate?: number;
     composite_score?: number;
+}
+
+interface Segment {
+    segment_id: string;
+    name: string;
+    customer_ids?: string[];
 }
 
 interface OptimizationEntry {
@@ -42,12 +49,16 @@ interface OptimizationEntry {
     action_taken?: string;
     timestamp?: string;
     iteration?: number;
+    winning_tones?: string[];
+    losing_tones?: string[];
+    winning_elements?: string[];
 }
 
 interface CampaignState {
     status: string;
+    iteration_count?: number;
     email_variants?: EmailVariant[];
-    segments?: string[];
+    segments?: Segment[];
     performance_reports?: PerformanceReport[];
     optimization_history?: OptimizationEntry[];
 }
@@ -102,7 +113,6 @@ const Dashboard = () => {
         try {
             await fetch(`${API}/campaign/${threadId}/approve`, { method: "POST" });
             setState("approved-polling");
-            setIteration(prev => prev + 1);
         } catch {
             showError("Failed to approve campaign.");
         } finally {
@@ -139,13 +149,15 @@ const Dashboard = () => {
                 const data: CampaignState = {
                     ...raw,
                     email_variants: raw?.data?.current_variants || raw?.email_variants || [],
-                    segments: raw?.segments || [],
+                    segments: raw?.data?.active_segments || raw?.segments || [],
                     performance_reports: raw?.data?.performance_reports || raw?.performance_reports || [],
                     optimization_history: raw?.data?.optimization_history || raw?.optimization_history || [],
+                    iteration_count: raw?.iteration_count ?? 0,
                 };
                 setCampaignData(data);
                 if (data.status === "awaiting_approval" && (state === "polling" || state === "approved-polling")) {
                     setState("approval");
+                    if (data.iteration_count !== undefined) setIteration(data.iteration_count + 1);
                 }
                 if (data.status === "completed" || data.status === "executed") {
                     setState("analytics");
@@ -279,10 +291,10 @@ const Dashboard = () => {
                                     <Users className="h-4 w-4 text-primary" />
                                     {campaignData.segments.map(seg => (
                                         <span
-                                            key={seg}
+                                            key={seg.segment_id}
                                             className="px-3 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary border border-primary/20"
                                         >
-                                            {seg}
+                                            {seg.name} ({seg.customer_ids?.length ?? 0})
                                         </span>
                                     ))}
                                 </div>
@@ -290,19 +302,27 @@ const Dashboard = () => {
 
                             {/* Email variants */}
                             <div className="grid md:grid-cols-2 gap-6 mb-8">
-                                {(campaignData.email_variants || []).map((variant, i) => (
+                                {(campaignData.email_variants || []).map((variant, i) => {
+                                    const seg = campaignData.segments?.find(s => s.segment_id === variant.segment_id);
+                                    return (
                                     <div key={i} className="glass rounded-2xl overflow-hidden">
                                         <div className="p-5 border-b border-border/50">
                                             <div className="flex items-center justify-between mb-2">
                                                 <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                                                    Variant {String.fromCharCode(65 + i)}
+                                                    {variant.variant_id || `Variant ${String.fromCharCode(65 + i)}`}
                                                 </span>
-                                                {(variant.tone || (variant as any).segment_id) && (
+                                                {variant.tone && (
                                                     <span className="px-2 py-0.5 rounded text-xs font-medium bg-accent/10 text-accent">
-                                                        {variant.tone || (variant as any).segment_id}
+                                                        {variant.tone}
                                                     </span>
                                                 )}
                                             </div>
+                                            {seg && (
+                                                <p className="text-xs text-primary/70 mb-1 flex items-center gap-1">
+                                                    <Users className="h-3 w-3" />
+                                                    {seg.name}
+                                                </p>
+                                            )}
                                             <h4 className="font-semibold text-foreground">{variant.subject}</h4>
                                         </div>
                                         <div className="p-5 bg-secondary/20">
@@ -312,7 +332,8 @@ const Dashboard = () => {
                                             />
                                         </div>
                                     </div>
-                                ))}
+                                    );
+                                })}
                             </div>
 
                             {/* Actions */}
@@ -391,12 +412,21 @@ const Dashboard = () => {
                                     <div className="h-[300px] w-full">
                                         <ResponsiveContainer width="100%" height="100%">
                                             <LineChart
-                                                data={campaignData.optimization_history.map((h, i) => ({
-                                                    iteration: `Iter ${h.iteration || i + 1}`,
-                                                    composite: h.iteration
-                                                        ? Math.min(0.95, 0.2 + h.iteration * 0.15)
-                                                        : 0.25, // Simulated growth visual
-                                                }))}
+                                                data={campaignData.optimization_history.map((h, i) => {
+                                                    // Compute actual avg composite from performance reports for this iteration's data
+                                                    // Each optimization_history entry corresponds to one iteration
+                                                    const iterNum = h.iteration ?? i;
+                                                    // Get all reports — use the best composite per iteration as a proxy
+                                                    const allReports = campaignData.performance_reports || [];
+                                                    // Use average composite score across all reports as a fallback metric
+                                                    const avgComposite = allReports.length > 0
+                                                        ? allReports.reduce((sum, r) => sum + (r.composite_score || 0), 0) / allReports.length
+                                                        : 0;
+                                                    return {
+                                                        iteration: `Iter ${iterNum + 1}`,
+                                                        composite: Number(avgComposite.toFixed(4)),
+                                                    };
+                                                })}
                                             >
                                                 <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
                                                 <XAxis
@@ -448,54 +478,84 @@ const Dashboard = () => {
                                 </div>
                             )}
 
-                            {/* Metrics Cards */}
+                            {/* Metrics Cards — Grouped by Segment */}
                             {campaignData.performance_reports && campaignData.performance_reports.length > 0 && (
-                                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-                                    {campaignData.performance_reports.map((report, i) => (
-                                        <div key={i} className="glass rounded-2xl p-6 gradient-border">
-                                            <div className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-4">
-                                                {report.variant_id || `Variant ${String.fromCharCode(65 + i)}`}
+                                <div className="space-y-6 mb-8">
+                                    {Object.entries(
+                                        (campaignData.performance_reports || []).reduce<Record<string, PerformanceReport[]>>((acc, r) => {
+                                            const key = r.segment_id || "unknown";
+                                            (acc[key] = acc[key] || []).push(r);
+                                            return acc;
+                                        }, {})
+                                    ).map(([segId, reports]) => {
+                                        const segName = campaignData.segments?.find(s => s.segment_id === segId)?.name || segId;
+                                        const bestReport = reports.reduce((a, b) => ((a.composite_score || 0) >= (b.composite_score || 0) ? a : b));
+                                        return (
+                                            <div key={segId}>
+                                                <h4 className="text-sm font-semibold text-primary mb-3 flex items-center gap-2">
+                                                    <Users className="h-4 w-4" />
+                                                    {segName}
+                                                </h4>
+                                                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                                                    {reports.map((report, i) => {
+                                                        const isWinner = report === bestReport && reports.length > 1;
+                                                        return (
+                                                        <div key={i} className={`glass rounded-2xl p-6 gradient-border ${isWinner ? "ring-1 ring-accent/50" : ""}`}>
+                                                            <div className="flex items-center justify-between mb-4">
+                                                                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+                                                                    {report.variant_id || `Variant ${String.fromCharCode(65 + i)}`}
+                                                                </span>
+                                                                {isWinner && (
+                                                                    <span className="px-2 py-0.5 rounded text-xs font-bold bg-accent/20 text-accent">
+                                                                        Winner
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                            <div className="space-y-4">
+                                                                <div>
+                                                                    <div className="flex items-center justify-between text-sm mb-1">
+                                                                        <span className="text-muted-foreground">Open Rate</span>
+                                                                        <span className="font-semibold text-foreground">
+                                                                            {((report.open_rate || 0) * 100).toFixed(1)}%
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
+                                                                        <div
+                                                                            className="h-full bg-primary rounded-full"
+                                                                            style={{ width: `${(report.open_rate || 0) * 100}%` }}
+                                                                        />
+                                                                    </div>
+                                                                </div>
+                                                                <div>
+                                                                    <div className="flex items-center justify-between text-sm mb-1">
+                                                                        <span className="text-muted-foreground">Click Rate</span>
+                                                                        <span className="font-semibold text-foreground">
+                                                                            {((report.click_rate || 0) * 100).toFixed(1)}%
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
+                                                                        <div
+                                                                            className="h-full bg-accent rounded-full"
+                                                                            style={{ width: `${(report.click_rate || 0) * 100}%` }}
+                                                                        />
+                                                                    </div>
+                                                                </div>
+                                                                <div className="pt-2 border-t border-border/50 flex items-center justify-between">
+                                                                    <span className="text-sm text-muted-foreground">
+                                                                        Composite Score
+                                                                    </span>
+                                                                    <span className="text-xl font-bold text-gradient">
+                                                                        {((report.composite_score || 0) * 100).toFixed(1)}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        );
+                                                    })}
+                                                </div>
                                             </div>
-                                            <div className="space-y-4">
-                                                <div>
-                                                    <div className="flex items-center justify-between text-sm mb-1">
-                                                        <span className="text-muted-foreground">Open Rate</span>
-                                                        <span className="font-semibold text-foreground">
-                                                            {((report.open_rate || 0) * 100).toFixed(1)}%
-                                                        </span>
-                                                    </div>
-                                                    <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                                                        <div
-                                                            className="h-full bg-primary rounded-full"
-                                                            style={{ width: `${(report.open_rate || 0) * 100}%` }}
-                                                        />
-                                                    </div>
-                                                </div>
-                                                <div>
-                                                    <div className="flex items-center justify-between text-sm mb-1">
-                                                        <span className="text-muted-foreground">Click Rate</span>
-                                                        <span className="font-semibold text-foreground">
-                                                            {((report.click_rate || 0) * 100).toFixed(1)}%
-                                                        </span>
-                                                    </div>
-                                                    <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                                                        <div
-                                                            className="h-full bg-accent rounded-full"
-                                                            style={{ width: `${(report.click_rate || 0) * 100}%` }}
-                                                        />
-                                                    </div>
-                                                </div>
-                                                <div className="pt-2 border-t border-border/50 flex items-center justify-between">
-                                                    <span className="text-sm text-muted-foreground">
-                                                        Composite Score
-                                                    </span>
-                                                    <span className="text-xl font-bold text-gradient">
-                                                        {((report.composite_score || 0) * 100).toFixed(1)}
-                                                    </span>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
+                                        );
+                                    })}
                                 </div>
                             )}
 
@@ -522,18 +582,31 @@ const Dashboard = () => {
                                                 <div className="flex-shrink-0 mt-0.5">
                                                     <TrendingUp className="h-4 w-4 text-accent" />
                                                 </div>
-                                                <div className="space-y-1">
+                                                <div className="space-y-2 flex-1">
                                                     {entry.action_taken && (
                                                         <p className="text-sm font-medium text-foreground">
-                                                            {entry.action_taken}
+                                                            Iteration {(entry.iteration ?? i) + 1}: {entry.action_taken}
                                                         </p>
                                                     )}
                                                     {entry.insight && (
                                                         <p className="text-sm text-muted-foreground">{entry.insight}</p>
                                                     )}
-                                                    {entry.timestamp && (
-                                                        <p className="text-xs text-muted-foreground/60">
-                                                            {entry.timestamp}
+                                                    {/* Structured optimization data */}
+                                                    <div className="flex flex-wrap gap-1.5 mt-1">
+                                                        {(entry.winning_tones || []).map(t => (
+                                                            <span key={`w-${t}`} className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-accent/15 text-accent border border-accent/20">
+                                                                <CheckCircle2 className="h-2.5 w-2.5 mr-1" /> {t}
+                                                            </span>
+                                                        ))}
+                                                        {(entry.losing_tones || []).map(t => (
+                                                            <span key={`l-${t}`} className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-destructive/15 text-destructive border border-destructive/20">
+                                                                <XCircle className="h-2.5 w-2.5 mr-1" /> {t}
+                                                            </span>
+                                                        ))}
+                                                    </div>
+                                                    {(entry.winning_elements || []).length > 0 && (
+                                                        <p className="text-xs text-muted-foreground/70 mt-1">
+                                                            Key elements: {entry.winning_elements?.join(", ")}
                                                         </p>
                                                     )}
                                                 </div>

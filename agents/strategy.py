@@ -70,7 +70,7 @@ def strategy_node(state: CampaignState) -> dict:
         """
 
     for segment in state.get("active_segments", []):
-        prompt = f"""
+        base_prompt = f"""
         You are a digital marketing strategist for an Indian BFSI company.
         Design an A/B testing strategy (2 variants) for this specific customer segment.
         
@@ -84,7 +84,9 @@ def strategy_node(state: CampaignState) -> dict:
         CRITICAL RULES:
         - Generate exactly 2 variant strategies for this segment.
         - Variant 1 should be a safe, standard approach based on the recommended tone.
-        - Variant 2 should test a specifically different angle from Variant 1.
+        - Variant 2 MUST use a COMPLETELY DIFFERENT tone from Variant 1.
+          For example, if V1 is "authoritative, formal", V2 could be "warm, conversational".
+          The two variants must NOT share the same primary tone word.
         - CTA URL must be included in both.
         - Seniors should have minimal to no emojis. Working age can have 1-2.
         {feedback_instruction}
@@ -92,7 +94,24 @@ def strategy_node(state: CampaignState) -> dict:
         Return the structured plan.
         """
         
-        plan = structured_llm.invoke(prompt)
+        # Invoke with retry to enforce tone differentiation between v1 and v2
+        plan = structured_llm.invoke(base_prompt)
+        
+        # --- PROGRAMMATIC TONE ENFORCEMENT ---
+        # If both variants have the same tone, re-invoke with stricter instructions.
+        if len(plan.variants) >= 2:
+            tone_v1 = plan.variants[0].tone.lower().strip()
+            tone_v2 = plan.variants[1].tone.lower().strip()
+            if tone_v1 == tone_v2:
+                print(f"  -> ⚠️  Same tone for both variants in {segment.name}: '{tone_v1}'. Regenerating V2...")
+                retry_prompt = base_prompt + f"""
+
+                CRITICAL CORRECTION: Your previous response gave BOTH variants the SAME tone: "{tone_v1}".
+                This defeats A/B testing. Variant 2 MUST use a completely different tone.
+                Variant 1 tone MUST stay as: "{tone_v1}"
+                Variant 2 tone MUST be distinctly different (different primary adjective).
+                """
+                plan = structured_llm.invoke(retry_prompt)
         
         # Convert the strategy plans into draft EmailVariants (leaving subject/body empty for the Creative Agent)
         for i, vs in enumerate(plan.variants):

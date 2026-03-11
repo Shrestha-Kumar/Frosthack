@@ -1,17 +1,23 @@
 import os
+from collections import defaultdict
 from langchain_groq import ChatGroq
 from pydantic import BaseModel
-from typing import List
+from typing import List, Dict
 from models import CampaignState, OptimizationRecord
 
-class OptimizationDecision(BaseModel):
+class SegmentAnalysis(BaseModel):
+    segment_id: str
+    winning_variant: str
+    winning_tone: str
+    losing_tone: str
     insight: str
+
+class OptimizationDecision(BaseModel):
+    overall_insight: str
     action_taken: str
+    segment_analyses: List[SegmentAnalysis]
     variants_changed: List[str]
     segments_retargeted: List[str]
-    should_continue: bool
-    winning_tones: List[str]
-    losing_tones: List[str]
     winning_elements: List[str]
 
 llm = ChatGroq(
@@ -44,22 +50,29 @@ def analytics_node(state: CampaignState) -> dict:
     # context alongside metrics — makes insights non-circular
     variants_map = {v.variant_id: v for v in state.get("current_variants", [])}
 
-    perf_data = [
-        {
-            "variant_id": r.variant_id,
-            "segment_id": r.segment_id,
-            "click_rate": round(r.click_rate * 100, 1),
-            "open_rate": round(r.open_rate * 100, 1),
-            "composite_score": round(r.composite_score, 4),
-            # Include email characteristics so insight can reference
-            # what actually caused the performance difference
-            "tone": variants_map[r.variant_id].tone if r.variant_id in variants_map else "unknown",
-            "has_emoji": variants_map[r.variant_id].has_emoji if r.variant_id in variants_map else None,
-            "bold_elements": variants_map[r.variant_id].bold_elements if r.variant_id in variants_map else [],
-            "subject_preview": variants_map[r.variant_id].subject[:60] if r.variant_id in variants_map else ""
-        }
-        for r in reports
-    ]
+    # --- PER-SEGMENT GROUPING ---
+    # Group reports by segment so we compare v1 vs v2 WITHIN each segment,
+    # not picking a single global winner across all segments.
+    segment_reports = defaultdict(list)
+    for r in reports:
+        segment_reports[r.segment_id].append(r)
+    
+    # Build per-segment performance data for the LLM
+    per_segment_data = {}
+    for seg_id, seg_reports in segment_reports.items():
+        per_segment_data[seg_id] = [
+            {
+                "variant_id": r.variant_id,
+                "click_rate_pct": round(r.click_rate * 100, 1),
+                "open_rate_pct": round(r.open_rate * 100, 1),
+                "composite_score": round(r.composite_score, 4),
+                "tone": variants_map[r.variant_id].tone if r.variant_id in variants_map else "unknown",
+                "has_emoji": variants_map[r.variant_id].has_emoji if r.variant_id in variants_map else None,
+                "bold_elements": variants_map[r.variant_id].bold_elements if r.variant_id in variants_map else [],
+                "subject_preview": variants_map[r.variant_id].subject[:60] if r.variant_id in variants_map else ""
+            }
+            for r in seg_reports
+        ]
 
     # Calculate best composite from PREVIOUS iteration for degradation detection
     prev_best = None
@@ -74,49 +87,94 @@ def analytics_node(state: CampaignState) -> dict:
     
     Evaluation Formula: composite_score = (0.7 * click_rate) + (0.3 * open_rate)
     
-    Performance data (includes email tone and content characteristics):
-    {perf_data}
+    Performance data GROUPED BY SEGMENT (compare v1 vs v2 WITHIN each segment):
+    {per_segment_data}
     
     Analyze the results:
-    1. Identify the winning variant per segment by composite_score.
-    2. Write a SPECIFIC insight about WHY it won — reference the tone, emoji
-       usage, subject line preview, and bold elements. Do NOT just say "higher
-       click rates caused the win." Explain what EMAIL CHARACTERISTIC likely
-       drove the difference.
-    3. List the winning tones (e.g. ["authoritative", "formal"]) and losing
-       tones (e.g. ["warm", "reassuring"]) based on the data.
+    1. For EACH segment, identify which variant (v1 or v2) won by composite_score.
+    2. For EACH segment, write a SPECIFIC insight about WHY that variant won —
+       reference the tone, emoji usage, subject line preview, and bold elements.
+       Do NOT just say "higher click rate." Explain what EMAIL CHARACTERISTIC
+       likely drove the difference for THAT specific audience.
+    3. For EACH segment, record the winning_tone and losing_tone.
+       A tone that wins for seniors may lose for young adults — track separately.
     4. List winning_elements — specific email features that correlated with
-       higher scores (e.g. ["no_emoji", "bold_return_rate", "urgency_cta"]).
-    5. Determine should_continue:
-       - Return True ONLY IF the highest composite score is below 0.85
-         AND the current best score is at least 5% better than previous best.
-       - Return False if performance degraded or improvement < 5%.
-
-    Current best composite: {current_best:.4f}
-    Previous best composite: {prev_best if prev_best else 'N/A (first iteration)'}
+       higher scores across segments (e.g. ["no_emoji", "bold_return_rate"]).
+    5. List segments_retargeted — segments where the margin between v1 and v2
+       was very small (< 0.05 composite difference) and need better testing.
     
-    Return the structured OptimizationDecision.
+    Return the structured OptimizationDecision with a segment_analyses entry
+    for each segment.
     """
     
     decision = structured_llm.invoke(prompt)
     
+    # --- PROGRAMMATIC TERMINATION LOGIC ---
+    # Do NOT trust the LLM for should_continue — calculate it ourselves.
+    should_continue = True
+    
+    if iteration == 0:
+        # First iteration: always continue (need baseline comparison)
+        should_continue = True
+        termination_reason = "first iteration — establishing baseline"
+    else:
+        if prev_best is not None and prev_best > 0:
+            improvement = (current_best - prev_best) / prev_best
+            if improvement < 0.05:
+                # Less than 5% improvement (or degradation) → stop
+                should_continue = False
+                termination_reason = f"insufficient improvement ({improvement*100:.1f}% < 5% threshold)"
+            elif current_best >= 0.85:
+                # Already at high performance → stop
+                should_continue = False
+                termination_reason = f"high performance reached ({current_best:.4f} >= 0.85)"
+            else:
+                should_continue = True
+                termination_reason = f"improvement detected ({improvement*100:.1f}%)"
+        else:
+            # No previous data to compare → continue
+            should_continue = True
+            termination_reason = "no previous baseline"
+    
+    print(f"  -> Termination check: {termination_reason} → should_continue={should_continue}")
+    
+    # --- EXTRACT PER-SEGMENT TONES ---
+    # Aggregate winning/losing tones from per-segment analyses
+    winning_tones = []
+    losing_tones = []
+    for sa in decision.segment_analyses:
+        if sa.winning_tone and sa.winning_tone not in winning_tones:
+            winning_tones.append(sa.winning_tone)
+        if sa.losing_tone and sa.losing_tone not in losing_tones:
+            # Only mark as losing if it didn't WIN in any other segment
+            losing_tones.append(sa.losing_tone)
+    
+    # Remove tones that appear in BOTH winning and losing
+    # (a tone can win for one segment but lose for another — don't ban it globally)
+    cross_winning_losers = set(winning_tones) & set(losing_tones)
+    if cross_winning_losers:
+        losing_tones = [t for t in losing_tones if t not in cross_winning_losers]
+        print(f"  -> Tones winning in some segments, losing in others (kept): {cross_winning_losers}")
+    
     opt_record = OptimizationRecord(
         iteration=iteration,
-        insight=decision.insight,
+        insight=decision.overall_insight,
         action_taken=decision.action_taken,
         variants_changed=decision.variants_changed,
         segments_retargeted=decision.segments_retargeted,
-        winning_tones=decision.winning_tones,
-        losing_tones=decision.losing_tones,
+        winning_tones=winning_tones,
+        losing_tones=losing_tones,
         winning_elements=decision.winning_elements
     )
     
-    print(f"  -> Insight: {decision.insight}")
-    print(f"  -> Winning tones: {decision.winning_tones}")
-    print(f"  -> Should Continue: {decision.should_continue}")
+    print(f"  -> Insight: {decision.overall_insight}")
+    print(f"  -> Per-segment winners: {[(sa.segment_id, sa.winning_variant, sa.winning_tone) for sa in decision.segment_analyses]}")
+    print(f"  -> Winning tones (aggregated): {winning_tones}")
+    print(f"  -> Losing tones (filtered): {losing_tones}")
+    print(f"  -> Should Continue: {should_continue}")
     
     return {
         "optimization_history": [opt_record],
-        "should_continue_optimization": decision.should_continue,
+        "should_continue_optimization": should_continue,
         "iteration_count": iteration + 1
     }

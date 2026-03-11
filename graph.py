@@ -37,7 +37,11 @@ def route_on_api_error(state: dict) -> str:
 
 def hitl_interrupt_node(state: CampaignState) -> dict:
     # This node doesn't do much; the magic happens because LangGraph pauses BEFORE it.
+    # When resumed with "approved" status, snapshot current variants as approved.
     print("⏸️ HITL Node: Human action required!")
+    status = state.get("hitl_status", "pending")
+    if status == "approved":
+        return {"approved_variants": state.get("current_variants", [])}
     return {}
 
 # --- Graph Builder ---

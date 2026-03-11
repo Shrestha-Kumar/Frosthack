@@ -166,6 +166,8 @@ async def get_campaign_state(thread_id: str):
         "status": current_status,
         "thread_id": thread_id,
         "next_node": state.next,
+        "iteration_count": state.values.get("iteration_count", 0),
+        "should_continue": state.values.get("should_continue_optimization", False),
         "data": {
             "current_variants": [v.model_dump() for v in state.values.get("current_variants", [])],
             "active_segments": [s.model_dump() for s in state.values.get("active_segments", [])],
