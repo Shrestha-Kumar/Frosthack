@@ -36,7 +36,13 @@ def metrics_fetcher_node(state: CampaignState) -> dict:
     variants = state.get("current_variants", [])
     campaign_map = state.get("campaign_variant_map", {})
 
-    for camp_id in state.get("scheduled_campaign_ids", []):
+    # Only fetch metrics for THIS iteration's campaigns.
+    # campaign_variant_map is overwritten each iteration (no reducer),
+    # so its keys are exactly the current iteration's campaign IDs.
+    # Do NOT use scheduled_campaign_ids — it accumulates across iterations
+    # via operator.add and would cause "No variant found" warnings for
+    # campaign IDs from previous iterations.
+    for camp_id in campaign_map.keys():
         response = report_tool.invoke({"campaign_id": camp_id})
 
         # The report API returns per-customer EO/EC rows, not aggregate rates.

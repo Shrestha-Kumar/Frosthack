@@ -26,7 +26,19 @@ def analytics_node(state: CampaignState) -> dict:
     print("🤖 Agent: Analyzing results and deciding next steps...")
     
     iteration = state.get("iteration_count", 0)
-    reports = state.get("performance_reports", [])
+    all_reports = state.get("performance_reports", [])
+    campaign_map = state.get("campaign_variant_map", {})
+
+    # --- CRITICAL: separate current vs previous iteration reports ---
+    # performance_reports accumulates via operator.add across iterations.
+    # campaign_variant_map is overwritten each iteration (no reducer),
+    # so its values are exactly the current iteration's variant IDs.
+    current_variant_ids = set(campaign_map.values())
+    
+    # Current iteration's reports: those whose variant_id is in the current map
+    reports = [r for r in all_reports if r.variant_id in current_variant_ids]
+    # Previous iterations' reports: everything else
+    prev_reports = [r for r in all_reports if r.variant_id not in current_variant_ids]
 
     # Build a map of variant metadata so we can include email content
     # context alongside metrics — makes insights non-circular
@@ -49,14 +61,12 @@ def analytics_node(state: CampaignState) -> dict:
         for r in reports
     ]
 
-    # Calculate best score from previous iteration for degradation detection
-    history = state.get("optimization_history", [])
+    # Calculate best composite from PREVIOUS iteration for degradation detection
     prev_best = None
-    if history:
-        prev_best = max(
-            [r.composite_score for r in reports],
-            default=None
-        )
+    if prev_reports:
+        prev_best = max(r.composite_score for r in prev_reports)
+
+    current_best = max([r.composite_score for r in reports], default=0)
 
     prompt = f"""
     You are a marketing analytics AI for SuperBFSI.
@@ -82,7 +92,7 @@ def analytics_node(state: CampaignState) -> dict:
          AND the current best score is at least 5% better than previous best.
        - Return False if performance degraded or improvement < 5%.
 
-    Current best composite: {max([r.composite_score for r in reports], default=0):.4f}
+    Current best composite: {current_best:.4f}
     Previous best composite: {prev_best if prev_best else 'N/A (first iteration)'}
     
     Return the structured OptimizationDecision.
