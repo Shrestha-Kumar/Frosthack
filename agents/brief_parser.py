@@ -2,10 +2,12 @@ import os
 from langchain_groq import ChatGroq
 from models import ParsedBrief, CampaignState
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+# Brief parser needs 70B for reliable structured output with List[str] fields.
+# Called only ONCE per run (~700 tokens) — negligible rate-limit impact.
+BRIEF_MODEL = "llama-3.3-70b-versatile"
 
 llm = ChatGroq(
-    model=GROQ_MODEL, 
+    model=BRIEF_MODEL, 
     temperature=0, 
     api_key=os.getenv("GROQ_API_KEY")
 )
