@@ -9,10 +9,15 @@ class GeneratedCopy(BaseModel):
     body_html: str
 
 BANNED_WORDS = [
-    "free", "guarantee", "act now", "limited time",
+    "free", "guarantee", "guaranteed", "act now", "limited time",
     "click here", "buy now", "urgent", "expires today",
     "don't miss", "last chance"
 ]
+
+# Terms that are ONLY valid for senior segments (60+).
+# 80TTB is an Income Tax Act provision exclusively for resident senior citizens.
+# +0.25% premium is a senior-specific offer from the brief.
+SENIOR_ONLY_TERMS = ["80TTB", "section 80ttb", "senior premium", "0.25% premium", "+0.25%"]
 
 llm = ChatGroq(
     model="llama-3.3-70b-versatile", 
@@ -129,9 +134,19 @@ def creative_node(state: CampaignState) -> dict:
         1. Email BODY: Only English text, emojis (ONLY if allowed below), and exactly this URL: {cta_url}
         2. Email SUBJECT: Only English text (NO emojis, NO URLs).
         3. NO images, NO attachments, NO external URLs other than the one specified.
-        4. BANNED WORDS: Do not use "Free", "FREE", "Guarantee", "Act now", "Limited time", "Click here", "Buy now". Use "guaranteed" or "assured" instead.
+        4. BANNED WORDS: Do not use "Free", "FREE", "Guarantee", "Guaranteed", "Act now",
+           "Limited time", "Click here", "Buy now". Use "assured" or "DICGC-insured" instead.
+           Do NOT use the word "guaranteed" — it is prohibited in Indian BFSI marketing by
+           SEBI/RBI regulations unless referring to a sovereign instrument. FD returns are
+           "assured" not "guaranteed".
         5. Font formatting allowed: <strong>, <em>, <u>. Use them to highlight the requested elements.
         6. Do NOT duplicate text — never write the same phrase both as plain text AND inside a formatting tag like <strong> or <em>.
+        7. ANTI-HALLUCINATION RULE: Do NOT invent, fabricate, or mention any offer, bonus,
+           cashback, referral reward, welcome bonus, or financial incentive that is NOT
+           explicitly listed in the PRODUCT DETAILS and Special Offers below.
+           The brief mentions ONLY the specific offers listed. Any invented offer is a
+           compliance violation in BFSI and will disqualify the submission.
+           If no special offer is listed for this segment, do NOT make one up.
            WRONG: "Control your finances <strong>Control your finances</strong>"
            CORRECT: "<strong>Control your finances</strong> with our exclusive offer"
         {segment_format_rules}
@@ -184,8 +199,9 @@ def creative_node(state: CampaignState) -> dict:
             Use professional alternatives:
             - Instead of "Limited time" use "Available now"
             - Instead of "Act now" use "Start today"
-            - Instead of "Guarantee" use "assured returns" or "DICGC-insured"
+            - Instead of "Guarantee" or "Guaranteed" use "assured returns" or "DICGC-insured"
             - Instead of "Free" use "complimentary" or remove entirely
+            - NEVER use the word "guaranteed" — it violates SEBI/RBI regulations for non-sovereign instruments
             """
             copy = structured_llm.invoke(stricter_prompt)
             print(f"  -> Regenerated {variant.variant_id} after violation correction.")
@@ -198,6 +214,52 @@ def creative_node(state: CampaignState) -> dict:
             # Match "text <tag>text</tag>" where the text before the tag matches the text inside
             pattern = rf'(\b[\w\s,.\'-]+?)\s*<{tag}>\1</{tag}>'
             body = re.sub(pattern, rf'<{tag}>\1</{tag}>', body, flags=re.IGNORECASE)
+        copy.body_html = body
+
+        # POST-GENERATION: Segment compliance check
+        # Prevent senior-only terms from leaking into non-senior segments
+        if "senior" not in variant.segment_id.lower():
+            body_lower = copy.body_html.lower() + " " + copy.subject.lower()
+            seg_violations = [term for term in SENIOR_ONLY_TERMS if term.lower() in body_lower]
+            if seg_violations:
+                print(f"  -> ⚠️  Segment compliance violation in {variant.variant_id}: {seg_violations}. Regenerating...")
+                compliance_prompt = prompt + f"""
+
+                CRITICAL CORRECTION: Your email contains terms that ONLY apply to senior citizens (60+):
+                {seg_violations}
+                This segment is NOT senior citizens. Remove ALL references to:
+                - Section 80TTB (this is an Income Tax provision ONLY for seniors 60+)
+                - Senior citizen premium rates or +0.25% offers
+                - Any senior-specific benefit
+                Replace with benefits relevant to this segment's age group.
+                """
+                copy = structured_llm.invoke(compliance_prompt)
+                body = copy.body_html
+                print(f"  -> Regenerated {variant.variant_id} after segment compliance fix.")
+
+        # POST-GENERATION: Sentence-level repetition check
+        # Detect duplicate sentences that the tag-level dedup misses
+        sentences = [s.strip() for s in re.split(r'[.!?]', re.sub(r'<[^>]+>', '', body)) if len(s.strip()) > 20]
+        seen_keys = {}
+        has_dupes = False
+        for s in sentences:
+            key = s[:40].lower()
+            if key in seen_keys:
+                has_dupes = True
+                break
+            seen_keys[key] = True
+        if has_dupes:
+            print(f"  -> ⚠️  Duplicate sentences detected in {variant.variant_id}. Regenerating...")
+            dedup_prompt = prompt + """
+
+            CRITICAL: Your previous email contained duplicate or near-duplicate sentences.
+            Each sentence must be unique. Do NOT repeat the same idea in different words.
+            Write concise, non-repetitive copy.
+            """
+            copy = structured_llm.invoke(dedup_prompt)
+            body = copy.body_html
+            print(f"  -> Regenerated {variant.variant_id} after dedup fix.")
+
         copy.body_html = body
 
         # Update the variant with the validated content

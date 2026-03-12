@@ -12,7 +12,7 @@ class VariantStrategy(BaseModel):
     has_emoji: bool
     emoji_positions: List[str]
     url_included: bool
-    url_position: str
+    url_position: str  # Must be one of: "end", "middle", "early", "early_and_end", "after_header". Do NOT put an actual URL here.
     bold_elements: List[str]
     italic_elements: List[str]
     strategy_explanation: str
@@ -99,6 +99,12 @@ def strategy_node(state: CampaignState) -> dict:
           bold_elements should be punchy, action-oriented phrases.
         - Working age / High income: can have 1-2 emojis. Standard URL placement.
         
+        URL POSITION FIELD:
+        - url_position must be a DESCRIPTOR, not an actual URL.
+          Valid values: "end", "middle", "early", "early_and_end", "after_header"
+          WRONG: "https://www.example.com/invest" or any URL string.
+          CORRECT: "end" or "early_and_end"
+        
         BOLD & ITALIC ELEMENTS — CRITICAL:
         - bold_elements and italic_elements MUST be actual customer-facing phrases
           that will appear VERBATIM inside <strong> or <em> tags in the email.
@@ -109,6 +115,12 @@ def strategy_node(state: CampaignState) -> dict:
         - CORRECT: ["1% higher assured returns", "DICGC-insured safety"]
         - CORRECT: ["Start your wealth journey today", "Section 80TTB tax benefit"]
         - Each element should be 2-8 words of compelling marketing copy.
+        
+        ANTI-HALLUCINATION RULE:
+        - Do NOT reference any offer, bonus, cashback, referral reward, welcome bonus,
+          or financial incentive that is NOT in the segment's strategy notes.
+        - If the brief does not mention a "₹500 bonus" or "welcome bonus", do NOT invent one.
+        - Stick strictly to the product details provided. Invented offers are BFSI compliance violations.
         {feedback_instruction}
         
         Return the structured plan.
