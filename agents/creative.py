@@ -80,12 +80,53 @@ def creative_node(state: CampaignState) -> dict:
         
         relevant_offers = _get_relevant_offers(variant.segment_id)
         
+        # --- SEGMENT-SPECIFIC FORMAT RULES ---
+        # The gamified API penalizes content that doesn't match demographic expectations.
+        # Seniors need plain/simple emails; young adults need CTA-first emails.
+        segment_format_rules = ""
+        is_senior = "senior" in variant.segment_id.lower()
+        is_young = "young" in variant.segment_id.lower()
+        
+        if is_senior:
+            segment_format_rules = """
+        SENIOR CITIZEN EMAIL FORMAT RULES (MANDATORY — API PENALIZES VIOLATIONS):
+        - Keep the email UNDER 120 words total. Seniors abandon long emails.
+        - Use ONLY simple HTML: <p>, <strong>, <em>. NO tables, NO divs, NO lists.
+        - ABSOLUTELY ZERO emojis anywhere in subject or body. Override has_emoji to false.
+        - Lead the FIRST sentence with the key benefit: Section 80TTB tax savings
+          or DICGC-insured safety or the specific return rate number.
+        - Use plain, direct language. NO jargon like "portfolio", "compounding",
+          "wealth creation". Say "savings", "safe returns", "tax benefit" instead.
+        - Include the CTA URL TWICE: once in the middle of the email AND once
+          at the very end. Senior readers often miss a single link.
+        - Subject line must include one of: "Section 80TTB" or "Senior Citizen"
+          or the return rate percentage. Keep subject under 8 words.
+        - Address the reader respectfully. Use "Dear Sir/Madam" or "Respected".
+        - End with a reassurance line about safety/DICGC insurance.
+        """
+        elif is_young:
+            segment_format_rules = """
+        YOUNG ADULT (18-24) EMAIL FORMAT RULES (MANDATORY — BOOSTS CLICK RATE):
+        - The CTA URL MUST appear within the FIRST 3 lines of the email body.
+          Young adults scroll fast — if the link is at the bottom, they never click.
+        - Keep the email UNDER 100 words. Short, punchy, mobile-first.
+        - Frame FD as a SMART first financial move, not a conservative one.
+          Use phrases like "Your first ₹10,000 grows to...", "Start at 18, retire rich",
+          "Beat your savings account by 1%+ — takes 2 minutes".
+        - ZERO financial jargon. No "portfolio diversification", "capital preservation",
+          "compounding returns". Say "your money grows", "higher interest", "easy start".
+        - Use 1-2 relevant emojis maximum (💰, 📈, ✅). No more.
+        - Include the CTA URL TWICE: once near the top, once at the end.
+        - Subject line should feel peer-driven: "Your friends are earning more on savings"
+          or include a specific number like "7.5% returns".
+        """
+        
         prompt = f"""
         You are an expert email copywriter for SuperBFSI, an Indian BFSI company.
         Write the email subject and HTML body for this specific strategy.
 
         STRICT CONTENT RULES — VIOLATIONS DISQUALIFY THE SYSTEM:
-        1. Email BODY: Only English text, emojis, and exactly this URL: {cta_url}
+        1. Email BODY: Only English text, emojis (ONLY if allowed below), and exactly this URL: {cta_url}
         2. Email SUBJECT: Only English text (NO emojis, NO URLs).
         3. NO images, NO attachments, NO external URLs other than the one specified.
         4. BANNED WORDS: Do not use "Free", "FREE", "Guarantee", "Act now", "Limited time", "Click here", "Buy now". Use "guaranteed" or "assured" instead.
@@ -93,6 +134,7 @@ def creative_node(state: CampaignState) -> dict:
         6. Do NOT duplicate text — never write the same phrase both as plain text AND inside a formatting tag like <strong> or <em>.
            WRONG: "Control your finances <strong>Control your finances</strong>"
            CORRECT: "<strong>Control your finances</strong> with our exclusive offer"
+        {segment_format_rules}
         {feedback_instruction}
         {segment_context}
 
@@ -102,10 +144,10 @@ def creative_node(state: CampaignState) -> dict:
 
         VARIANT STRATEGY INSTRUCTIONS:
         - Tone: {variant.tone}
-        - Emojis allowed in body: {variant.has_emoji} (Positions: {variant.emoji_positions})
+        - Emojis allowed in body: {"false (ZERO emojis for this segment)" if is_senior else variant.has_emoji} (Positions: {"none" if is_senior else variant.emoji_positions})
         - Phrases to Bold (wrap in <strong> tags): {variant.bold_elements}
         - Phrases to Italicize (wrap in <em> tags): {variant.italic_elements}
-        - URL Placement: {variant.url_position}
+        - URL Placement: {"early — within first 3 lines AND at end" if is_young else variant.url_position}
         
         CRITICAL — BOLD & ITALIC USAGE:
         - The bold_elements and italic_elements above are actual phrases to use.
@@ -120,7 +162,7 @@ def creative_node(state: CampaignState) -> dict:
         You MUST return the output as a valid JSON object matching this exact structure, with no markdown formatting or extra text:
         {{
             "subject": "Your Subject Line Here",
-            "body_html": "<p>Your HTML email body here, ending with the URL: {cta_url}</p>"
+            "body_html": "<p>Your HTML email body here, with the URL: {cta_url}</p>"
         }}
         """
         

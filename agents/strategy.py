@@ -88,7 +88,16 @@ def strategy_node(state: CampaignState) -> dict:
           For example, if V1 is "authoritative, formal", V2 could be "warm, conversational".
           The two variants must NOT share the same primary tone word.
         - CTA URL must be included in both.
-        - Seniors should have minimal to no emojis. Working age can have 1-2.
+        
+        SEGMENT-SPECIFIC EMOJI & FORMAT RULES:
+        - Senior segments (60+): has_emoji MUST be false. ZERO emojis.
+          Senior emails are penalized by the API for any emoji usage.
+          url_position MUST be "early_and_end" (twice in the email).
+          bold_elements should include the return rate and "Section 80TTB" or "DICGC-insured".
+        - Young Adults (18-24): emojis limited to 1-2 max. 
+          url_position MUST be "early" (within first 3 lines of body).
+          bold_elements should be punchy, action-oriented phrases.
+        - Working age / High income: can have 1-2 emojis. Standard URL placement.
         
         BOLD & ITALIC ELEMENTS — CRITICAL:
         - bold_elements and italic_elements MUST be actual customer-facing phrases
