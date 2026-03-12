@@ -19,8 +19,10 @@ BANNED_WORDS = [
 # +0.25% premium is a senior-specific offer from the brief.
 SENIOR_ONLY_TERMS = ["80TTB", "section 80ttb", "senior premium", "0.25% premium", "+0.25%"]
 
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+
 llm = ChatGroq(
-    model="llama-3.3-70b-versatile", 
+    model=GROQ_MODEL, 
     temperature=0.4, # Higher temperature for copywriting creativity
     api_key=os.getenv("GROQ_API_KEY")
 )

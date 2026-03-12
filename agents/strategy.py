@@ -20,8 +20,10 @@ class VariantStrategy(BaseModel):
 class SegmentStrategyPlan(BaseModel):
     variants: List[VariantStrategy]
 
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+
 llm = ChatGroq(
-    model="llama-3.3-70b-versatile", 
+    model=GROQ_MODEL, 
     temperature=0.2, # slight variance for A/B testing ideas
     api_key=os.getenv("GROQ_API_KEY")
 )

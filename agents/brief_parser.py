@@ -2,9 +2,10 @@ import os
 from langchain_groq import ChatGroq
 from models import ParsedBrief, CampaignState
 
-# Swapped to Groq Llama 3.3 70B for development stability
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+
 llm = ChatGroq(
-    model="llama-3.3-70b-versatile", 
+    model=GROQ_MODEL, 
     temperature=0, 
     api_key=os.getenv("GROQ_API_KEY")
 )

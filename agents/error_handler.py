@@ -7,7 +7,8 @@ class ErrorFix(BaseModel):
     action: str   # "retry", "fix_payload", or "skip"
     insight: str
 
-llm = ChatGroq(model="llama-3.3-70b-versatile", api_key=os.getenv("GROQ_API_KEY"))
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+llm = ChatGroq(model=GROQ_MODEL, api_key=os.getenv("GROQ_API_KEY"))
 structured_llm = llm.with_structured_output(ErrorFix)
 
 MAX_RETRIES = 3

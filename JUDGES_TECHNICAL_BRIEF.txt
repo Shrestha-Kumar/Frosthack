@@ -1,0 +1,490 @@
+================================================================================
+  CAMPAIGNX — TECHNICAL DEEP DIVE FOR JUDGES
+  Team: Four Musketeers | FrostHack XPECTO 2026 @ IIT Mandi
+================================================================================
+
+This document highlights the engineering decisions, safety mechanisms, and
+production-grade practices built into CampaignX that go beyond a standard
+hackathon submission. Each point references the specific file and function.
+
+================================================================================
+1. DYNAMIC TOOL DISCOVERY — ZERO HARDCODED API CALLS
+   File: tools/discovery.py
+================================================================================
+
+CampaignX does NOT hardcode any API endpoint. At runtime, the first node
+(load_openapi_tools_node) reads the OpenAPI 3.1 spec (campaignx_api.json)
+and dynamically constructs LangChain StructuredTool instances:
+
+  1. Parses every path + method from the spec
+  2. Resolves $ref references in request body schemas
+  3. Maps OpenAPI types (string, integer, array) to Python types
+  4. Creates a dynamic Pydantic input model per endpoint using create_model()
+  5. Wraps each endpoint in a StructuredTool with automatic validation
+
+If the API spec changes (new endpoints, modified parameters), the system
+adapts automatically with zero code changes. This is true dynamic discovery
+— not just "reading a JSON file for URLs."
+
+Each generated tool includes:
+  - Exponential backoff retry (3 attempts: 1s, 2s, 4s delays)
+  - 30-second timeout per attempt
+  - Smart retry logic: retries on 5xx server errors, fails fast on 4xx client errors
+  - Structured error returns instead of unhandled exceptions
+
+================================================================================
+2. 5-SEGMENT MICRO-TARGETING WITH INCOME-BASED THRESHOLDS
+   File: agents/profiler.py
+================================================================================
+
+Instead of broad 2-3 segment approaches, we segment 1,000 customers into
+5 data-driven micro-segments using real API demographic data:
+
+  Segment                         | Logic                              | Count
+  ────────────────────────────────|────────────────────────────────────|──────
+  Female Senior Citizens 60+      | Gender=F, Age≥60                   | 204
+  Male Senior Citizens 60+        | Gender=M, Age≥60                   | 61
+  High Income Working Age 25-59   | Age 25-59, Income > ₹3.5L/month   | 113
+  Working Age Adults 25-59        | Age 25-59, Income ≤ ₹3.5L/month   | 304
+  Young Adults 18-24              | Age < 25                           | 318
+  ────────────────────────────────|────────────────────────────────────|──────
+  TOTAL                           |                                    | 1000
+
+Key design decisions:
+  - Income threshold (₹3.5L) derived from actual P75 of the cohort data
+  - Segments are MUTUALLY EXCLUSIVE — no customer appears in two segments
+  - High-income explicitly excluded from general working-age to prevent dilution
+  - Each segment carries its own: strategy_notes, psychological_hook,
+    recommended_tone, and recommended_send_time
+  - Senior gender split matters: female seniors respond to different messaging
+    (Section 80TTB emphasis) vs male seniors (capital preservation, DICGC safety)
+
+================================================================================
+3. TRUE A/B TESTING WITH 50/50 CUSTOMER SPLIT
+   File: agents/executor.py → execution_node()
+================================================================================
+
+Most hackathon A/B implementations randomly assign globally or send both
+variants to all customers. CampaignX does PER-SEGMENT 50/50 splitting:
+
+  For each segment:
+    customer_ids[:midpoint]  → Variant 1 (e.g., formal tone)
+    customer_ids[midpoint:]  → Variant 2 (e.g., casual tone)
+
+This means:
+  - Each variant reaches EXACTLY half the segment's customers
+  - Comparison is apples-to-apples within the same demographic
+  - No cross-contamination between segments
+  - Statistical validity of the A/B test is maintained
+
+The split only happens during optimization iterations. The final send
+uses the winner for ALL customers (see point 4).
+
+================================================================================
+4. WINNER-TAKE-ALL FINAL SEND — SCORING MAXIMIZER
+   File: agents/executor.py → final_send_node()
+   File: graph.py → route_after_analysis()
+================================================================================
+
+After the optimization loop concludes, a dedicated final_send_node fires.
+This is architecturally separate from the A/B execution node.
+
+  graph routing: analytics → final_send → END (not analytics → END)
+
+The final_send_node:
+  1. Reads best_variant_ids (per-segment winner map from analytics)
+  2. Looks up the full email content for each winner
+  3. Sends the winning variant to ALL customers in each segment
+     (not just the 50% who received it during A/B testing)
+  4. Uses segment.customer_ids — the FULL list, not the split half
+
+Why this matters for scoring:
+  The rulebook says "the minimum set of LATEST campaigns that covered
+  the ENTIRE customer cohort." By sending the winner to ALL 1,000
+  customers, we ensure the LATEST campaign for every customer is our
+  best-performing variant. This maximizes total EO=Y + EC=Y.
+
+  Without this: 500 customers would have the losing variant as their
+  latest campaign, dragging down the composite score.
+
+Fallback safety:
+  - If best_variant_ids is missing a segment → falls back to first variant
+  - If a variant ID isn't found in current_variants → searches by segment_id
+  - Prints explicit warnings for any fallback so debugging is easy
+
+================================================================================
+5. PROGRAMMATIC TERMINATION — LLM DOES NOT DECIDE WHEN TO STOP
+   File: agents/analytics.py → analytics_node()
+================================================================================
+
+A common pitfall in agentic systems: letting the LLM decide "should we
+continue optimizing?" — this leads to infinite loops or premature stopping.
+
+CampaignX uses HARD PROGRAMMATIC THRESHOLDS:
+
+  if improvement < 0.05:    → STOP (less than 5% gain over previous iteration)
+  if current_best >= 0.85:  → STOP (already high-performing)
+  if iteration >= max_iter: → STOP (hard cap, default 3)
+
+The LLM in the analytics node ONLY analyzes which variant won and why.
+The should_continue_optimization flag is computed by Python code, not
+the LLM's opinion. This prevents:
+  - Infinite optimization loops (degrades content over iterations)
+  - Premature stopping when there's still improvement headroom
+  - LLM hallucinating "we should stop" when metrics are improving
+
+================================================================================
+6. FIVE-STAGE POST-GENERATION CONTENT VALIDATION PIPELINE
+   File: agents/creative.py → creative_node()
+================================================================================
+
+Every generated email passes through 5 sequential validation stages.
+Each stage can trigger auto-regeneration with a targeted correction prompt.
+
+  Stage 1: BANNED WORD DETECTION
+  ──────────────────────────────
+  Scans subject + body for 11 BFSI-prohibited terms:
+    "free", "guarantee", "guaranteed", "act now", "limited time",
+    "click here", "buy now", "urgent", "expires today",
+    "don't miss", "last chance"
+
+  "Guaranteed" is explicitly banned because SEBI/RBI regulations prohibit
+  using "guaranteed returns" for non-sovereign investment instruments.
+  FD returns are "assured", not "guaranteed."
+
+  If violations found → regenerates with stricter prompt listing specific
+  alternatives (e.g., "assured returns" instead of "guaranteed").
+
+  Stage 2: HTML TAG DEDUPLICATION
+  ───────────────────────────────
+  Regex catches: "phrase <strong>phrase</strong>" → "<strong>phrase</strong>"
+  LLMs frequently write text plain AND bolded. This strips the duplicate.
+  Applied for <strong>, <em>, and <u> tags.
+
+  Stage 3: SEGMENT COMPLIANCE (CROSS-SEGMENT GUARD)
+  ──────────────────────────────────────────────────
+  SENIOR_ONLY_TERMS = ["80TTB", "section 80ttb", "senior premium",
+                       "0.25% premium", "+0.25%"]
+
+  If ANY of these appear in a non-senior email → auto-regenerate.
+  Section 80TTB is an Income Tax Act provision ONLY for senior citizens 60+.
+  Mentioning it in a 22-year-old's email is factually wrong and a
+  compliance violation in BFSI marketing.
+
+  Stage 4: SENTENCE-LEVEL REPETITION DETECTION
+  ─────────────────────────────────────────────
+  Strips HTML tags, splits body on sentence boundaries (.!?), and compares
+  first-40-character keys. If duplicate sentences found → auto-regenerate.
+  This catches repetitions that Stage 2 (tag-level) cannot.
+
+  Stage 5: ANTI-HALLUCINATION GUARD (IN PROMPT)
+  ──────────────────────────────────────────────
+  The prompt explicitly states:
+    "Do NOT invent, fabricate, or mention any offer, bonus, cashback,
+     referral reward, welcome bonus, or financial incentive that is NOT
+     explicitly listed in the PRODUCT DETAILS and Special Offers."
+
+  This prevents the LLM from inventing financial promises (like a
+  "₹500 welcome bonus") that SuperBFSI never offered — a critical
+  compliance concern in banking/financial services.
+
+================================================================================
+7. SEGMENT-SPECIFIC EMAIL FORMAT RULES
+   File: agents/creative.py → prompt construction
+================================================================================
+
+The gamified API simulates realistic customer behavior. Seniors don't
+engage with emoji-heavy HTML emails. Young adults don't scroll to the
+bottom for a CTA link. Our creative agent adapts format PER SEGMENT:
+
+  SENIOR CITIZENS (60+):
+    - Under 120 words (seniors abandon long emails)
+    - Simple HTML only: <p>, <strong>, <em> — NO tables, divs, lists
+    - ZERO emojis (overrides strategy has_emoji flag programmatically)
+    - First sentence leads with Section 80TTB or DICGC-insured safety
+    - CTA URL placed TWICE (middle + end — seniors miss a single link)
+    - Subject line includes "Section 80TTB" or the return rate %
+    - Respectful address: "Dear Sir/Madam" or "Respected"
+    - Plain language: "savings" not "portfolio", "safe returns" not
+      "capital preservation"
+
+  YOUNG ADULTS (18-24):
+    - Under 100 words, mobile-first format
+    - CTA URL within FIRST 3 LINES (young adults scroll fast)
+    - FD framed as a smart first financial move, not conservative
+    - Zero jargon: "your money grows" not "compounding returns"
+    - 1-2 emojis max, peer-driven subject lines
+    - CTA URL placed TWICE (top + end)
+
+  WORKING AGE / HIGH INCOME:
+    - Standard format, 1-2 emojis allowed
+    - Data-driven messaging, return rate emphasis
+
+================================================================================
+8. OFFER FILTERING — SEGMENT-RELEVANT OFFERS ONLY
+   File: agents/creative.py → _get_relevant_offers()
+================================================================================
+
+The parsed brief may contain multiple special offers. Not every offer is
+relevant to every segment. Our system filters at the creative stage:
+
+  - "Senior citizen" / "80TTB" offers → ONLY shown to senior segments
+  - "Under 25" / "first-time" offers → ONLY shown to young adults
+  - "Premium" / "wealth" / "HNI" offers → ONLY shown to high income
+  - General offers → shown to ALL segments
+
+This prevents a senior from seeing "Start your FD journey at 18" and
+a 22-year-old from seeing "Section 80TTB tax benefit for seniors."
+
+================================================================================
+9. CROSS-SEGMENT TONE TRACKING — NO FALSE TONE BANNING
+   File: agents/analytics.py → analytics_node()
+================================================================================
+
+After each A/B iteration, the analytics agent identifies winning and
+losing tones PER SEGMENT. A common mistake: globally banning a tone
+that "lost" — but it may have lost for seniors while winning for youth.
+
+Our system:
+  1. Collects winning_tones and losing_tones per segment
+  2. Computes the INTERSECTION of winning and losing
+  3. Removes tones from the losing list if they appear in ANY winning list
+  4. Only truly-global losers are passed to the next iteration
+
+Example:
+  "Formal" wins for seniors but loses for young adults →
+  "Formal" is KEPT in the strategy pool (not banned globally).
+  Only "casual" losing for seniors AND young adults → banned.
+
+================================================================================
+10. VARIANT ID NORMALIZATION — HANDLING LLM SHORT-FORM IDS
+    File: agents/analytics.py → analytics_node()
+================================================================================
+
+The LLM in the analytics node sometimes returns "v2" as the winner
+instead of the full ID "seg_young_adults_v2." This breaks the
+variant lookup in final_send_node.
+
+Our multi-level normalization:
+
+  1. Direct match: "seg_young_adults_v2" in valid_variant_ids → use it
+  2. Prefix reconstruction: segment_id + "_" + "v2" → "seg_young_adults_v2"
+  3. Suffix matching: find any valid ID ending with "_v2" AND starting with
+     the segment_id → use it
+  4. Warning log if all normalization fails (never silently drops a winner)
+
+================================================================================
+11. ACCUMULATIVE BEST VARIANT MAP
+    File: agents/analytics.py → analytics_node()
+================================================================================
+
+best_variant_ids has no LangGraph reducer (it overwrites per iteration).
+A naive implementation would lose previous iterations' winners.
+
+Our fix: manual merge on every iteration:
+
+  best_variant_ids = dict(state.get("best_variant_ids", {}))  # carry forward
+  # ... update with this iteration's winners ...
+
+This means if Iteration 1 picks a winner for seg_female_senior but
+Iteration 2's analytics doesn't mention seniors (identical scores),
+the Iteration 1 winner is PRESERVED for the final send.
+
+Additionally: any active segment without an explicit winner gets a
+DEFAULT of v1 — ensuring 100% segment coverage in final_send.
+
+================================================================================
+12. TONE ENFORCEMENT WITH PROGRAMMATIC RETRY
+    File: agents/strategy.py → strategy_node()
+================================================================================
+
+A/B testing requires two DIFFERENT variants. If the LLM generates the
+same tone for both (e.g., "formal, professional" for v1 AND v2), the
+test is meaningless.
+
+Our programmatic guard:
+
+  tone_v1 = plan.variants[0].tone.lower().strip()
+  tone_v2 = plan.variants[1].tone.lower().strip()
+  if tone_v1 == tone_v2:
+      → Re-invoke LLM with explicit correction: "V2 MUST be different"
+
+This is not a prompt-only instruction — it's a code-level enforcement
+that re-invokes the LLM when the output violates the constraint.
+
+================================================================================
+13. SAFE METRIC ATTRIBUTION — ID-BASED LOOKUP
+    File: agents/metrics.py → metrics_fetcher_node()
+================================================================================
+
+campaign_variant_map stores { campaign_id: variant_id } for each
+send_campaign call. When metrics come back, we do:
+
+  variant_id = campaign_map.get(camp_id)
+  variant = next(v for v in variants if v.variant_id == variant_id)
+
+This is ID-based, not position-based. Position-based lookups break when:
+  - An API call fails (shifts indices)
+  - The order of API responses differs from send order
+  - Previous iterations' campaign IDs accumulate
+
+We also ONLY iterate over campaign_map.keys() (which is overwritten each
+iteration), NOT scheduled_campaign_ids (which accumulates via operator.add).
+This prevents re-fetching metrics for old campaigns.
+
+================================================================================
+14. CORRECT EO/EC COMPUTATION FROM RAW API ROWS
+    File: agents/metrics.py → _compute_rates_from_report()
+================================================================================
+
+The CampaignX report API returns per-customer rows with EO/EC as "Y"/"N"
+strings. There are NO aggregate open_rate or click_rate fields.
+
+Our computation:
+  opened = sum(1 for row in data if row.get("EO") == "Y")
+  clicked = sum(1 for row in data if row.get("EC") == "Y")
+  open_rate = opened / total
+  click_rate = clicked / total
+
+We also track raw EO/EC COUNTS (not just rates) because the hackathon
+scoring formula is based on absolute counts across all 1,000 customers:
+
+  Score = 0.7 × (total_EC_Y / 1000) + 0.3 × (total_EO_Y / 1000)
+
+Each iteration logs:
+  "SCORING TOTALS this iteration: EO=Y: 239, EC=Y: 67, Combined: 306"
+
+================================================================================
+15. SELF-HEALING ERROR HANDLER WITH RETRY CAPS
+    File: agents/error_handler.py + graph.py routing
+================================================================================
+
+If the execution node encounters API errors:
+
+  graph routing: execute_campaign → route_on_api_error
+    → "success" → fetch_metrics (no errors)
+    → "error"   → error_correction → execute_campaign (retry)
+
+The error_correction_node:
+  1. Checks retry count against MAX_RETRIES (3)
+  2. If under limit: LLM analyzes the error and decides retry/fix/skip
+  3. If AT limit: FORCE SKIP regardless of LLM opinion
+  4. On skip: sets api_error_log = ["SKIP"] which routes to metrics
+
+This prevents infinite retry loops while still allowing intelligent
+error recovery for transient failures.
+
+================================================================================
+16. HUMAN-IN-THE-LOOP (HITL) WITH LANGGRAPH interrupt_before
+    File: graph.py → build_campaign_graph()
+================================================================================
+
+  graph = builder.compile(
+      checkpointer=memory,
+      interrupt_before=["hitl_approval"]
+  )
+
+The graph PAUSES before the hitl_approval node. The FastAPI backend
+holds the thread state in SQLite. The React frontend shows all
+10 variants (2 per segment) for human review.
+
+  "approved" → executes campaigns
+  "rejected" + feedback → regenerates creative with feedback injected
+
+The feedback is spliced directly into the creative prompt:
+  "CRITICAL HUMAN FEEDBACK FOR REGENERATION: [feedback text]"
+
+This creates a true human-in-the-loop that can course-correct content
+without breaking the automation pipeline.
+
+================================================================================
+17. API QUOTA MANAGEMENT — CACHE TOGGLE + RATE LIMIT AWARENESS
+    File: agents/profiler.py + .env configuration
+================================================================================
+
+The live API has a 100 calls/day/endpoint limit. Our system manages this:
+
+  USE_CACHE=true   → loads customers from local cache (0 API calls)
+  USE_CACHE=false   → fetches from live API, auto-caches for next run
+  MOCK_MODE=true    → uses 50 dummy customers (no API calls at all)
+
+Full run budget: ~71 API calls (35 send + 30 report + 5 final + 1 cohort)
+This leaves headroom for 1 retry run if something fails.
+
+The profiler auto-saves the cohort to customer_cohort_cache.json after a
+live fetch, so subsequent runs within the same day use zero API calls
+for customer data.
+
+================================================================================
+18. LANGGRAPH STATE DESIGN — REDUCERS AND OVERWRITES
+    File: models.py → CampaignState
+================================================================================
+
+We use TypedDict with deliberate reducer choices:
+
+  ACCUMULATING (operator.add):
+    - scheduled_campaign_ids → tracks ALL campaign IDs across iterations
+    - performance_reports → keeps full history for trend analysis
+    - optimization_history → preserves insights from all iterations
+
+  OVERWRITING (no reducer):
+    - campaign_variant_map → only current iteration's mappings matter
+    - current_variants → replaced each creative cycle
+    - best_variant_ids → manually merged in analytics (see point 11)
+
+This distinction is critical. Using operator.add on campaign_variant_map
+would accumulate stale mappings and break metric attribution.
+
+================================================================================
+19. FULL OBSERVABILITY VIA LANGFUSE
+    Configuration: .env (LANGFUSE_SECRET_KEY, LANGFUSE_PUBLIC_KEY)
+================================================================================
+
+Every LLM call, agent decision, state transition, and API response is
+traced via Langfuse. This provides:
+
+  - Token usage and cost tracking per agent
+  - Latency breakdown per node
+  - Full prompt/response visibility for debugging
+  - Iteration-over-iteration comparison of generated content
+
+Judges can review the Langfuse dashboard to see exactly what the LLM
+produced, what was validated/rejected, and how decisions were made.
+
+================================================================================
+20. ARCHITECTURE SUMMARY — WHAT MAKES THIS PRODUCTION-GRADE
+================================================================================
+
+  ┌─────────────────────────────────────────────────────┐
+  │              NOT JUST "LLM + API CALL"              │
+  │                                                     │
+  │  ✓ Dynamic tool discovery (not hardcoded)           │
+  │  ✓ 5 micro-segments (not 2-3 basic ones)           │
+  │  ✓ True 50/50 A/B split                            │
+  │  ✓ Winner-take-all final send (100% coverage)      │
+  │  ✓ Programmatic termination (not LLM-decided)       │
+  │  ✓ 5-stage content validation pipeline              │
+  │  ✓ Anti-hallucination guard (BFSI compliance)       │
+  │  ✓ Cross-segment compliance (80TTB guard)           │
+  │  ✓ Cross-segment tone tracking (no false banning)   │
+  │  ✓ Variant ID normalization (handles LLM quirks)    │
+  │  ✓ Accumulative winner map with defaults            │
+  │  ✓ Tone enforcement with programmatic retry         │
+  │  ✓ Safe ID-based metric attribution                 │
+  │  ✓ Raw EO/EC count tracking for scoring             │
+  │  ✓ Self-healing error handler with retry caps       │
+  │  ✓ Human-in-the-loop with feedback injection        │
+  │  ✓ API quota management (cache/mock toggles)        │
+  │  ✓ Deliberate LangGraph reducer vs overwrite design │
+  │  ✓ Full Langfuse observability                      │
+  │  ✓ Exponential backoff on API calls                 │
+  │  ✓ Sentence dedup + banned word + offer filtering   │
+  │                                                     │
+  │  Total backend: ~1,700 lines of Python              │
+  │  10 agent nodes + 1 final send node                 │
+  │  Zero hardcoded API calls                           │
+  └─────────────────────────────────────────────────────┘
+
+================================================================================
+END OF DOCUMENT
+================================================================================

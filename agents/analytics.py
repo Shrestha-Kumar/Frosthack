@@ -20,8 +20,10 @@ class OptimizationDecision(BaseModel):
     segments_retargeted: List[str]
     winning_elements: List[str]
 
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+
 llm = ChatGroq(
-    model="llama-3.3-70b-versatile", 
+    model=GROQ_MODEL, 
     temperature=0.1, 
     api_key=os.getenv("GROQ_API_KEY")
 )
