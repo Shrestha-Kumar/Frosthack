@@ -20,10 +20,12 @@ class OptimizationDecision(BaseModel):
     segments_retargeted: List[str]
     winning_elements: List[str]
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+# Analytics needs 70B for reliable nested structured output (List[SegmentAnalysis]).
+# Called 1-3 times per run (~6K tokens total) — minimal rate-limit impact.
+ANALYTICS_MODEL = "llama-3.3-70b-versatile"
 
 llm = ChatGroq(
-    model=GROQ_MODEL, 
+    model=ANALYTICS_MODEL, 
     temperature=0.1, 
     api_key=os.getenv("GROQ_API_KEY")
 )

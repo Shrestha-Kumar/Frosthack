@@ -20,10 +20,12 @@ class VariantStrategy(BaseModel):
 class SegmentStrategyPlan(BaseModel):
     variants: List[VariantStrategy]
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+# Strategy needs 70B for reliable nested structured output (List[VariantStrategy]).
+# Called 5× per iteration (~18K tokens for 3 iters) — within rate limits.
+STRATEGY_MODEL = "llama-3.3-70b-versatile"
 
 llm = ChatGroq(
-    model=GROQ_MODEL, 
+    model=STRATEGY_MODEL, 
     temperature=0.2, # slight variance for A/B testing ideas
     api_key=os.getenv("GROQ_API_KEY")
 )
