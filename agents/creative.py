@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from langchain_groq import ChatGroq
 from pydantic import BaseModel
 from models import CampaignState, EmailVariant
@@ -27,7 +28,41 @@ llm = ChatGroq(
     api_key=os.getenv("GROQ_API_KEY")
 )
 
-structured_llm = llm.with_structured_output(GeneratedCopy)
+# DO NOT use .with_structured_output() for creative — Groq's function calling
+# chokes on HTML with escaped quotes in body_html. Parse JSON from raw text instead.
+
+def _parse_copy_from_response(text: str) -> GeneratedCopy:
+    """Extract JSON from LLM text response and parse into GeneratedCopy."""
+    # Try to find JSON block in the response
+    # Handle both ```json ... ``` and raw { ... } formats
+    json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+    if json_match:
+        raw = json_match.group(1)
+    else:
+        # Find the first { ... } block
+        brace_start = text.find('{')
+        if brace_start == -1:
+            raise ValueError(f"No JSON found in LLM response: {text[:200]}")
+        # Find matching closing brace
+        depth = 0
+        for i in range(brace_start, len(text)):
+            if text[i] == '{':
+                depth += 1
+            elif text[i] == '}':
+                depth -= 1
+                if depth == 0:
+                    raw = text[brace_start:i+1]
+                    break
+        else:
+            raw = text[brace_start:]
+    
+    data = json.loads(raw)
+    return GeneratedCopy(subject=data["subject"], body_html=data["body_html"])
+
+def _invoke_creative(prompt: str) -> GeneratedCopy:
+    """Invoke the LLM and parse the JSON response into GeneratedCopy."""
+    response = llm.invoke(prompt)
+    return _parse_copy_from_response(response.content)
 
 def creative_node(state: CampaignState) -> dict:
     print("🤖 Agent: Generating email HTML content...")
@@ -183,7 +218,7 @@ def creative_node(state: CampaignState) -> dict:
         }}
         """
         
-        copy = structured_llm.invoke(prompt)
+        copy = _invoke_creative(prompt)
 
         # POST-GENERATION VALIDATION
         # Check both subject and body for banned words (case-insensitive)
@@ -205,7 +240,7 @@ def creative_node(state: CampaignState) -> dict:
             - Instead of "Free" use "complimentary" or remove entirely
             - NEVER use the word "guaranteed" — it violates SEBI/RBI regulations for non-sovereign instruments
             """
-            copy = structured_llm.invoke(stricter_prompt)
+            copy = _invoke_creative(stricter_prompt)
             print(f"  -> Regenerated {variant.variant_id} after violation correction.")
 
         # POST-GENERATION: Fix duplicated text around HTML tags
@@ -235,7 +270,7 @@ def creative_node(state: CampaignState) -> dict:
                 - Any senior-specific benefit
                 Replace with benefits relevant to this segment's age group.
                 """
-                copy = structured_llm.invoke(compliance_prompt)
+                copy = _invoke_creative(compliance_prompt)
                 body = copy.body_html
                 print(f"  -> Regenerated {variant.variant_id} after segment compliance fix.")
 
@@ -258,7 +293,7 @@ def creative_node(state: CampaignState) -> dict:
             Each sentence must be unique. Do NOT repeat the same idea in different words.
             Write concise, non-repetitive copy.
             """
-            copy = structured_llm.invoke(dedup_prompt)
+            copy = _invoke_creative(dedup_prompt)
             body = copy.body_html
             print(f"  -> Regenerated {variant.variant_id} after dedup fix.")
 
