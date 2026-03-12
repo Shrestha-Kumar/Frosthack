@@ -56,7 +56,7 @@ def _parse_copy_from_response(text: str) -> GeneratedCopy:
         else:
             raw = text[brace_start:]
     
-    data = json.loads(raw)
+    data = json.loads(raw, strict=False)
     return GeneratedCopy(subject=data["subject"], body_html=data["body_html"])
 
 def _invoke_creative(prompt: str) -> GeneratedCopy:
