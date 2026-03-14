@@ -188,8 +188,6 @@ CampaignX/
 │       │   ├── Index.tsx     #   Campaign creation & HITL approval
 │       │   └── Dashboard.tsx #   Metrics visualization & variant cards
 │       └── components/       #   shadcn/ui component library
-├── docs/                     # Documentation files
-│   └── JUDGES_TECHNICAL_BRIEF.txt # Technical deep dive architecture document
 └── README.md
 ```
 
@@ -228,6 +226,7 @@ uvicorn api.main:app --reload --port 8000
 ### 3. Frontend
 
 ```bash
+# In a new terminal, from the project root:
 cd frontend
 npm install    # or: bun install
 npm run dev    # or: bun dev
