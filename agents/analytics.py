@@ -1,4 +1,5 @@
 import os
+import itertools as _itertools
 from collections import defaultdict
 from langchain_groq import ChatGroq
 from pydantic import BaseModel
@@ -21,19 +22,29 @@ class OptimizationDecision(BaseModel):
     winning_elements: List[str]
 
 # Analytics needs 70B for reliable nested structured output (List[SegmentAnalysis]).
-# Called 1-3 times per run (~6K tokens total) — minimal rate-limit impact.
-ANALYTICS_MODEL = "llama-3.3-70b-versatile"
+ANALYTICS_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-llm = ChatGroq(
-    model=ANALYTICS_MODEL, 
-    temperature=0.1, 
-    api_key=os.getenv("GROQ_API_KEY")
-)
+def _build_key_cycle():
+    keys = [k for k in [
+        os.getenv("GROQ_API_KEY"),
+        os.getenv("GROQ_API_KEY_2"),
+        os.getenv("GROQ_API_KEY_3"),
+        os.getenv("GROQ_API_KEY_4"),
+        os.getenv("GROQ_API_KEY_5"),
+    ] if k]
+    if not keys:
+        raise ValueError("No GROQ API keys found in environment!")
+    print(f"  🔑 [analytics] Groq key rotation: {len(keys)} key(s) loaded")
+    return _itertools.cycle(keys)
 
-structured_llm = llm.with_structured_output(OptimizationDecision)
+_key_cycle = _build_key_cycle()
+
+def _get_llm():
+    return ChatGroq(model=ANALYTICS_MODEL, temperature=0.1, api_key=next(_key_cycle))
 
 def analytics_node(state: CampaignState) -> dict:
     print("🤖 Agent: Analyzing results and deciding next steps...")
+    structured_llm = _get_llm().with_structured_output(OptimizationDecision)
     
     iteration = state.get("iteration_count", 0)
     all_reports = state.get("performance_reports", [])

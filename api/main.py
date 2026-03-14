@@ -155,6 +155,16 @@ async def get_campaign_state(thread_id: str):
     config = {"configurable": {"thread_id": thread_id}}
     state = active_graphs[thread_id].get_state(config)
     
+    # Collect all historical variants for reporting
+    history = list(active_graphs[thread_id].get_state_history(config))
+    all_variants_dict = {}
+    # Iterate backwards so newer versions of the same variant_id (if any) override older ones
+    for h in reversed(history):
+        variants = h.values.get("current_variants") or []
+        for v in variants:
+            all_variants_dict[v.variant_id] = v
+    all_variants = list(all_variants_dict.values())
+    
     # NEW: Properly determine if the graph is completely finished
     if not state.next:
         current_status = "completed"
@@ -170,10 +180,11 @@ async def get_campaign_state(thread_id: str):
         "iteration_count": state.values.get("iteration_count", 0),
         "should_continue": state.values.get("should_continue_optimization", False),
         "data": {
-            "current_variants": [v.model_dump() for v in state.values.get("current_variants", [])],
-            "active_segments": [s.model_dump() for s in state.values.get("active_segments", [])],
-            "performance_reports": [r.model_dump() for r in state.values.get("performance_reports", [])],
-            "optimization_history": [h.model_dump() for h in state.values.get("optimization_history", [])]
+            "email_variants": [v.model_dump() for v in all_variants],
+            "current_variants": [v.model_dump() for v in (state.values.get("current_variants") or [])],
+            "active_segments": [s.model_dump() for s in (state.values.get("active_segments") or [])],
+            "performance_reports": [r.model_dump() for r in (state.values.get("performance_reports") or [])],
+            "optimization_history": [h.model_dump() for h in (state.values.get("optimization_history") or [])]
         }
     }
     

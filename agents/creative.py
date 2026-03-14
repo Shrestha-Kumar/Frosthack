@@ -1,5 +1,6 @@
 import os
 import re
+import itertools as _itertools
 import json
 from langchain_groq import ChatGroq
 from pydantic import BaseModel
@@ -20,13 +21,43 @@ BANNED_WORDS = [
 # +0.25% premium is a senior-specific offer from the brief.
 SENIOR_ONLY_TERMS = ["80TTB", "section 80ttb", "senior premium", "0.25% premium", "+0.25%"]
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+# Section 80C applies to ELSS/PPF/life insurance — NOT to Fixed Deposits.
+# FDs fall under Section 80TTB (seniors only) or have no tax deduction for others.
+# Any 80C reference in an FD email is a hallucination and a compliance violation.
+INVALID_FD_TERMS = [
+    "section 80c", "80c deduction", "80c benefit", "80c tax", "tax saving fd",
+    "tax-saving fd", "section 80 c", "80 c benefit"
+]
 
-llm = ChatGroq(
-    model=GROQ_MODEL, 
-    temperature=0.4, # Higher temperature for copywriting creativity
-    api_key=os.getenv("GROQ_API_KEY")
+# Absolute interest rate percentages the model tends to hallucinate.
+# The product offers RELATIVE advantages only: "1% higher" and "0.25% premium".
+# Any specific absolute rate like 7.5%, 8%, 5.25%, 1.25% is invented.
+import re as _re
+HALLUCINATED_RATE_PATTERN = _re.compile(
+    r'\b([4-9]\d?\.?\d*|[1-9]\d\.\d*)\s*%'  # matches 4%–99.x%
 )
+
+# Creative node needs 70B — 8B hallucinates absolute rates and ignores compliance rules.
+# Strategy/analytics/metrics can stay on 8B (structured output, schema-enforced).
+GROQ_MODEL = os.getenv("GROQ_CREATIVE_MODEL", os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"))
+
+def _build_key_cycle():
+    keys = [k for k in [
+        os.getenv("GROQ_API_KEY"),
+        os.getenv("GROQ_API_KEY_2"),
+        os.getenv("GROQ_API_KEY_3"),
+        os.getenv("GROQ_API_KEY_4"),
+        os.getenv("GROQ_API_KEY_5"),
+    ] if k]
+    if not keys:
+        raise ValueError("No GROQ API keys found in environment!")
+    print(f"  🔑 [creative] Groq key rotation: {len(keys)} key(s) loaded")
+    return _itertools.cycle(keys)
+
+_key_cycle = _build_key_cycle()
+
+def _get_llm():
+    return ChatGroq(model=GROQ_MODEL, temperature=0.4, api_key=next(_key_cycle))
 
 # DO NOT use .with_structured_output() for creative — Groq's function calling
 # chokes on HTML with escaped quotes in body_html. Parse JSON from raw text instead.
@@ -60,8 +91,8 @@ def _parse_copy_from_response(text: str) -> GeneratedCopy:
     return GeneratedCopy(subject=data["subject"], body_html=data["body_html"])
 
 def _invoke_creative(prompt: str) -> GeneratedCopy:
-    """Invoke the LLM and parse the JSON response into GeneratedCopy."""
-    response = llm.invoke(prompt)
+    """Invoke the LLM with a fresh key from rotation and parse the JSON response."""
+    response = _get_llm().invoke(prompt)
     return _parse_copy_from_response(response.content)
 
 def creative_node(state: CampaignState) -> dict:
@@ -186,6 +217,19 @@ def creative_node(state: CampaignState) -> dict:
            If no special offer is listed for this segment, do NOT make one up.
            WRONG: "Control your finances <strong>Control your finances</strong>"
            CORRECT: "<strong>Control your finances</strong> with our exclusive offer"
+        8. ABSOLUTE RATE PROHIBITION: Do NOT state any specific absolute interest rate
+           percentage such as 7%, 7.5%, 8%, 5.25%, 1.25%, 6.5% etc. anywhere in the
+           subject or body. The ONLY rate references permitted are:
+             - "1% higher than the market average" (relative advantage)
+             - "+0.25% premium" or "additional 0.25%" (senior bonus, senior segments only)
+           Writing an absolute rate like "7.5% p.a." is a hallucination — we have not
+           disclosed an absolute rate. This violates RBI advertising guidelines.
+        9. NO RETURN PROJECTIONS: Do NOT calculate or state how a specific deposit amount
+           grows (e.g. "your ₹10,000 grows to ₹12,000"). Say "your savings grow faster" instead.
+       10. SECTION 80C PROHIBITION: Do NOT mention Section 80C, 80C deduction, or
+           "tax-saving FD" — Section 80C does NOT apply to Fixed Deposits. Only Section
+           80TTB applies, and ONLY for senior citizens (60+). Any 80C reference is a
+           compliance hallucination and disqualifies the submission.
         {segment_format_rules}
         {feedback_instruction}
         {segment_context}
@@ -273,6 +317,55 @@ def creative_node(state: CampaignState) -> dict:
                 copy = _invoke_creative(compliance_prompt)
                 body = copy.body_html
                 print(f"  -> Regenerated {variant.variant_id} after segment compliance fix.")
+
+        # POST-GENERATION: Section 80C hallucination check (applies to ALL segments)
+        # 80C does not apply to FDs — only 80TTB applies, and only for seniors.
+        body_lower = copy.body_html.lower() + " " + copy.subject.lower()
+        fd_violations = [term for term in INVALID_FD_TERMS if term.lower() in body_lower]
+        if fd_violations:
+            print(f"  -> ⚠️  Invalid FD tax claim in {variant.variant_id}: {fd_violations}. Regenerating...")
+            fd_prompt = prompt + f"""
+
+            CRITICAL COMPLIANCE CORRECTION:
+            Your email incorrectly referenced: {fd_violations}
+            Section 80C does NOT apply to Fixed Deposits — this is factually wrong and
+            an RBI/SEBI compliance violation. Remove ALL references to Section 80C.
+            For senior segments: use Section 80TTB instead (interest income deduction up to ₹50,000).
+            For non-senior segments: do NOT mention any tax deduction for FD interest.
+            """
+            copy = _invoke_creative(fd_prompt)
+            body = copy.body_html
+            print(f"  -> Regenerated {variant.variant_id} after 80C compliance fix.")
+
+        # POST-GENERATION: Absolute rate hallucination check
+        # Catches invented rates like "7.5%", "8%", "5.25%" in subject or body.
+        # Allowed: "0.25%" (senior premium), "1%" only as "1% higher" (relative).
+        combined_for_rates = copy.subject + " " + copy.body_html
+        rate_matches = HALLUCINATED_RATE_PATTERN.findall(combined_for_rates)
+        # Filter out the authorised relative references
+        allowed_fragments = ["0.25", "1%", "1 %"]
+        actual_violations = []
+        for match in rate_matches:
+            if not any(match.startswith(a.rstrip('%')) for a in allowed_fragments):
+                actual_violations.append(match + "%")
+        if actual_violations:
+            print(f"  -> ⚠️  Absolute rate hallucination in {variant.variant_id}: {actual_violations}. Regenerating...")
+            rate_prompt = prompt + f"""
+
+            CRITICAL CORRECTION: Your email stated absolute interest rate figures: {actual_violations}
+            We have NOT disclosed an absolute rate. Remove ALL specific percentages except:
+              - "1% higher than the market average" (relative, this is allowed)
+              - "+0.25% additional" for senior segments only (relative, this is allowed)
+            Replace invented rates with: "higher than market average returns" or "superior returns".
+            """
+            copy = _invoke_creative(rate_prompt)
+            body = copy.body_html
+            print(f"  -> Regenerated {variant.variant_id} after absolute rate fix.")
+
+        # POST-GENERATION: DICGC typo auto-fix (8B model commonly outputs DICIC/DIGCG)
+        copy.body_html = re.sub(r'DIC[^G]C|D[^I]CGC', 'DICGC', copy.body_html)
+        copy.subject   = re.sub(r'DIC[^G]C|D[^I]CGC', 'DICGC', copy.subject)
+        body = copy.body_html
 
         # POST-GENERATION: Sentence-level repetition check
         # Detect duplicate sentences that the tag-level dedup misses

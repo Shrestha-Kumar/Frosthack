@@ -1,4 +1,5 @@
 import os
+import itertools as _itertools
 import json
 from langchain_groq import ChatGroq
 from pydantic import BaseModel
@@ -12,7 +13,7 @@ class VariantStrategy(BaseModel):
     has_emoji: bool
     emoji_positions: List[str]
     url_included: bool
-    url_position: str  # Must be one of: "end", "middle", "early", "early_and_end", "after_header". Do NOT put an actual URL here.
+    url_position: str
     bold_elements: List[str]
     italic_elements: List[str]
     strategy_explanation: str
@@ -21,16 +22,25 @@ class SegmentStrategyPlan(BaseModel):
     variants: List[VariantStrategy]
 
 # Strategy needs 70B for reliable nested structured output (List[VariantStrategy]).
-# Called 5× per iteration (~18K tokens for 3 iters) — within rate limits.
-STRATEGY_MODEL = "llama-3.3-70b-versatile"
+STRATEGY_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 
-llm = ChatGroq(
-    model=STRATEGY_MODEL, 
-    temperature=0.2, # slight variance for A/B testing ideas
-    api_key=os.getenv("GROQ_API_KEY")
-)
+def _build_key_cycle():
+    keys = [k for k in [
+        os.getenv("GROQ_API_KEY"),
+        os.getenv("GROQ_API_KEY_2"),
+        os.getenv("GROQ_API_KEY_3"),
+        os.getenv("GROQ_API_KEY_4"),
+        os.getenv("GROQ_API_KEY_5"),
+    ] if k]
+    if not keys:
+        raise ValueError("No GROQ API keys found in environment!")
+    print(f"  🔑 [strategy] Groq key rotation: {len(keys)} key(s) loaded")
+    return _itertools.cycle(keys)
 
-structured_llm = llm.with_structured_output(SegmentStrategyPlan)
+_key_cycle = _build_key_cycle()
+
+def _get_llm():
+    return ChatGroq(model=STRATEGY_MODEL, temperature=0.2, api_key=next(_key_cycle))
 
 def strategy_node(state: CampaignState) -> dict:
     print("🤖 Agent: Planning A/B strategy for segments...")
@@ -131,10 +141,22 @@ def strategy_node(state: CampaignState) -> dict:
         """
         
         # Invoke with retry to enforce tone differentiation between v1 and v2
+        structured_llm = _get_llm().with_structured_output(SegmentStrategyPlan)
         plan = structured_llm.invoke(base_prompt)
+
+        # --- BANNED WORD METADATA SCAN ---
+        # Also catches internal labels like "Highest conversion potential" leaking into copy
+        banned_in_meta = ["guaranteed", "guarantee", "free", "act now", "limited time", "conversion potential", "highest conversion", "strategy notes"]
+        for vs in plan.variants:
+            meta_text = " ".join(vs.bold_elements + vs.italic_elements).lower()
+            meta_violations = [w for w in banned_in_meta if w in meta_text]
+            if meta_violations:
+                print(f"  -> ⚠️  Banned word in strategy metadata: {meta_violations}. Regenerating...")
+                structured_llm = _get_llm().with_structured_output(SegmentStrategyPlan)
+                plan = structured_llm.invoke(base_prompt + f"\nCRITICAL: bold_elements and italic_elements must NOT contain: {meta_violations}")
+                break
         
         # --- PROGRAMMATIC TONE ENFORCEMENT ---
-        # If both variants have the same tone, re-invoke with stricter instructions.
         if len(plan.variants) >= 2:
             tone_v1 = plan.variants[0].tone.lower().strip()
             tone_v2 = plan.variants[1].tone.lower().strip()
@@ -147,12 +169,13 @@ def strategy_node(state: CampaignState) -> dict:
                 Variant 1 tone MUST stay as: "{tone_v1}"
                 Variant 2 tone MUST be distinctly different (different primary adjective).
                 """
+                structured_llm = _get_llm().with_structured_output(SegmentStrategyPlan)
                 plan = structured_llm.invoke(retry_prompt)
         
         # Convert the strategy plans into draft EmailVariants (leaving subject/body empty for the Creative Agent)
         for i, vs in enumerate(plan.variants):
             draft_variant = EmailVariant(
-                variant_id=f"{segment.segment_id}_v{i+1}",
+                variant_id=f"{segment.segment_id}_i{state.get('iteration_count',0)}_v{i+1}",
                 segment_id=segment.segment_id,
                 subject="", # Creative agent will fill this
                 body_html="", # Creative agent will fill this

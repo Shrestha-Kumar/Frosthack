@@ -1,4 +1,5 @@
 import random
+import time
 from models import CampaignState, PerformanceReport
 from tools.discovery import get_loaded_tools
 from datetime import datetime, timezone
@@ -26,6 +27,8 @@ def _compute_rates_from_report(response: dict) -> tuple:
 
 def metrics_fetcher_node(state: CampaignState) -> dict:
     print("🤖 Agent: Fetching performance metrics...")
+    print("⏳ Waiting 15s for API to process engagement data...")
+    time.sleep(15)
     tools = get_loaded_tools()
     report_tool = next((t for t in tools if "get_report" in t.name), None)
     

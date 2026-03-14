@@ -1,4 +1,5 @@
 import os
+import itertools as _itertools
 from langchain_groq import ChatGroq
 from pydantic import BaseModel
 from models import CampaignState
@@ -7,9 +8,24 @@ class ErrorFix(BaseModel):
     action: str   # "retry", "fix_payload", or "skip"
     insight: str
 
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-llm = ChatGroq(model=GROQ_MODEL, api_key=os.getenv("GROQ_API_KEY"))
-structured_llm = llm.with_structured_output(ErrorFix)
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
+def _build_key_cycle():
+    keys = [k for k in [
+        os.getenv("GROQ_API_KEY"),
+        os.getenv("GROQ_API_KEY_2"),
+        os.getenv("GROQ_API_KEY_3"),
+        os.getenv("GROQ_API_KEY_4"),
+        os.getenv("GROQ_API_KEY_5"),
+    ] if k]
+    if not keys:
+        raise ValueError("No GROQ API keys found in environment!")
+    return _itertools.cycle(keys)
+
+_key_cycle = _build_key_cycle()
+
+def _get_llm():
+    return ChatGroq(model=GROQ_MODEL, api_key=next(_key_cycle))
 
 MAX_RETRIES = 3
 
@@ -36,6 +52,7 @@ def error_correction_node(state: CampaignState) -> dict:
     """
     
     try:
+        structured_llm = _get_llm().with_structured_output(ErrorFix)
         fix = structured_llm.invoke(prompt)
         print(f"  -> Recovery Strategy: {fix.action} ({fix.insight})")
         

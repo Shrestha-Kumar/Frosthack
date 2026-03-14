@@ -19,15 +19,35 @@ def _parse_send_time(raw_time: str) -> str:
     except Exception:
         return "10:00"  # safe default: 10 AM
 
-def _format_send_time(time_str: str) -> str:
+def _format_send_time(time_str: str = None) -> str:
     """
     Build the send_time string in API format 'DD:MM:YY HH:MM:SS'.
-    Uses a near-future time to ensure the API accepts it.
+
+    WHY we ignore `time_str` entirely:
+    Segment recommended_send_time values are morning slots (8-10 AM IST).
+    When campaigns run in the afternoon, those times are already in the past.
+    datetime.now() returns UTC on most servers, so the "roll to tomorrow"
+    check fires against UTC clock but the API validates against IST — causing
+    422 "send_time cannot be in the past" errors for any morning slot.
+
+    Solution: always schedule 30 minutes from NOW (server local time).
+    This is guaranteed future regardless of what time of day the run happens,
+    and gives the API enough time to queue the campaign properly.
     """
-    # Schedule 2 hours from now to give the API a valid future time
-    # This avoids timezone edge cases and "must be future" rejections
-    future = datetime.now() + timedelta(hours=2)
-    return f"{future.strftime('%d:%m:%y')} {time_str}:00"
+    from datetime import timezone
+    import pytz
+
+    try:
+        ist = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.now(ist)
+        future_ist = now_ist + timedelta(minutes=30)
+        return future_ist.strftime('%d:%m:%y %H:%M:%S')
+    except Exception:
+        # pytz not installed — fall back to UTC + 5:30 offset manually
+        now_utc = datetime.utcnow()
+        now_ist = now_utc + timedelta(hours=5, minutes=30)
+        future_ist = now_ist + timedelta(minutes=30)
+        return future_ist.strftime('%d:%m:%y %H:%M:%S')
 
 def execution_node(state: CampaignState) -> dict:
     print("🤖 Agent: Executing campaigns (scheduling)...")

@@ -1,22 +1,8 @@
 import { useToast } from "@/hooks/use-toast";
 import { AnimatePresence, motion } from "framer-motion";
-import {
-    Activity,
-    BarChart3,
-    Brain,
-    CheckCircle2,
-    FileText,
-    Loader2,
-    Mail,
-    RefreshCw,
-    Send,
-    Sparkles,
-    TrendingUp,
-    Users,
-    XCircle,
-} from "lucide-react";
+import { BarChart3, CheckCircle2, FileText, Loader2, Mail, RefreshCw, Send, Users, XCircle } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import Metrics from "./Metrics";
 
 const API = "http://localhost:8000";
 
@@ -80,6 +66,8 @@ const Dashboard = () => {
     const [feedback, setFeedback] = useState("");
     const [loading, setLoading] = useState(false);
     const [iteration, setIteration] = useState(1);
+    const [hoveredVariant, setHoveredVariant] = useState<number | null>(null);
+    const [selectedVariant, setSelectedVariant] = useState<number | null>(null);
 
     const showError = useCallback(
         (msg: string) => {
@@ -100,6 +88,7 @@ const Dashboard = () => {
             if (!res.ok) throw new Error("Failed to start campaign");
             const data = await res.json();
             setThreadId(data.thread_id);
+            localStorage.setItem("lastThreadId", data.thread_id);
             setState("polling");
         } catch {
             showError("Could not reach the AI backend. Is the server running?");
@@ -138,6 +127,38 @@ const Dashboard = () => {
         }
     };
 
+    // Resume existing thread if exists
+    useEffect(() => {
+        const id = localStorage.getItem("lastThreadId");
+        if (id && state === "brief") {
+            setThreadId(id);
+            fetch(`${API}/campaign/${id}/state`)
+                .then(res => res.json())
+                .then(raw => {
+                    if (raw.status === "failed") return; // Let it start fresh if failed
+                    const data: CampaignState = {
+                        ...raw,
+                        email_variants:
+                            raw?.data?.email_variants || raw?.data?.current_variants || raw?.email_variants || [],
+                        segments: raw?.data?.active_segments || raw?.segments || [],
+                        performance_reports: raw?.data?.performance_reports || raw?.performance_reports || [],
+                        optimization_history: raw?.data?.optimization_history || raw?.optimization_history || [],
+                        iteration_count: raw?.iteration_count ?? 0,
+                    };
+                    setCampaignData(data);
+                    if (data.iteration_count !== undefined && data.iteration_count > 0) {
+                        setIteration(data.iteration_count);
+                    }
+
+                    if (data.status === "awaiting_approval") setState("approval");
+                    else if (data.status === "completed" || data.status === "executed") setState("analytics");
+                    else if (data.status === "running") setState("polling");
+                    else if (data.status === "executing") setState("approved-polling");
+                })
+                .catch(console.error);
+        }
+    }, []);
+
     // Polling
     useEffect(() => {
         if (state !== "polling" && state !== "approved-polling") return;
@@ -148,7 +169,8 @@ const Dashboard = () => {
                 const raw = await res.json();
                 const data: CampaignState = {
                     ...raw,
-                    email_variants: raw?.data?.current_variants || raw?.email_variants || [],
+                    email_variants:
+                        raw?.data?.email_variants || raw?.data?.current_variants || raw?.email_variants || [],
                     segments: raw?.data?.active_segments || raw?.segments || [],
                     performance_reports: raw?.data?.performance_reports || raw?.performance_reports || [],
                     optimization_history: raw?.data?.optimization_history || raw?.optimization_history || [],
@@ -222,10 +244,10 @@ const Dashboard = () => {
                 <AnimatePresence mode="wait">
                     {/* STATE A: Brief Input */}
                     {state === "brief" && (
-                        <motion.div key="brief" {...pageVariants} className="max-w-2xl mx-auto">
+                        <motion.div key="brief" {...pageVariants} className="max-w-4xl mx-auto">
                             <div className="text-center mb-8">
                                 <h2 className="text-3xl font-bold text-foreground mb-2">Campaign Brief</h2>
-                                <p className="text-muted-foreground">
+                                <p className="text-muted-foreground text-lg">
                                     Describe your BFSI marketing campaign and let the AI take over.
                                 </p>
                             </div>
@@ -234,8 +256,8 @@ const Dashboard = () => {
                                     value={brief}
                                     onChange={e => setBrief(e.target.value)}
                                     placeholder="e.g. Launch a credit card rewards campaign targeting millennials with high spending habits..."
-                                    rows={6}
-                                    className="w-full bg-secondary/50 border border-border/50 rounded-xl p-4 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 resize-none text-sm leading-relaxed"
+                                    rows={12}
+                                    className="w-full bg-secondary/40 border border-border/50 rounded-xl p-6 text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/50 resize-y text-lg font-medium font-sans leading-relaxed shadow-inner"
                                 />
                                 <button
                                     onClick={startCampaign}
@@ -277,7 +299,7 @@ const Dashboard = () => {
 
                     {/* STATE B: HITL Approval */}
                     {state === "approval" && campaignData && (
-                        <motion.div key="approval" {...pageVariants}>
+                        <motion.div key="approval" {...pageVariants} className="w-full max-w-7xl mx-auto">
                             <div className="text-center mb-8">
                                 <h2 className="text-3xl font-bold text-foreground mb-2">Review & Approve</h2>
                                 <p className="text-muted-foreground">
@@ -300,72 +322,203 @@ const Dashboard = () => {
                                 </div>
                             )}
 
-                            {/* Email variants */}
-                            <div className="grid md:grid-cols-2 gap-6 mb-8">
-                                {(campaignData.email_variants || []).map((variant, i) => {
-                                    const seg = campaignData.segments?.find(s => s.segment_id === variant.segment_id);
-                                    return (
-                                    <div key={i} className="glass rounded-2xl overflow-hidden">
-                                        <div className="p-5 border-b border-border/50">
-                                            <div className="flex items-center justify-between mb-2">
-                                                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                                                    {variant.variant_id || `Variant ${String.fromCharCode(65 + i)}`}
+                            <div className="flex flex-col lg:flex-row gap-8 mb-8">
+                                {/* Left Side: Squares Grid */}
+                                <div className="flex-1">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-2 gap-6">
+                                        {(campaignData.email_variants || []).map((variant, i) => {
+                                            const seg = campaignData.segments?.find(
+                                                s => s.segment_id === variant.segment_id,
+                                            );
+                                            const isSelected = selectedVariant === i;
+                                            const isHovered = hoveredVariant === i;
+                                            const isActive = isSelected || (selectedVariant === null && isHovered);
+
+                                            return (
+                                                <div
+                                                    key={i}
+                                                    onMouseEnter={() => setHoveredVariant(i)}
+                                                    onMouseLeave={() => setHoveredVariant(null)}
+                                                    onClick={() => setSelectedVariant(isSelected ? null : i)}
+                                                    className={`glass rounded-2xl overflow-hidden flex flex-col min-h-[320px] cursor-pointer transition-all duration-200 border-2 ${
+                                                        isActive
+                                                            ? "border-primary ring-2 ring-primary/20 scale-[1.02] shadow-lg shadow-primary/10"
+                                                            : "border-border/50 hover:border-primary/50 hover:scale-[1.01]"
+                                                    }`}
+                                                >
+                                                    <div className="p-5 border-b border-border/50 bg-card/60 shrink-0">
+                                                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                                                            <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest bg-secondary/70 px-2 py-1 rounded">
+                                                                {variant.variant_id ||
+                                                                    `Variant ${String.fromCharCode(65 + i)}`}
+                                                            </span>
+                                                            {variant.tone && (
+                                                                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-accent/20 text-accent ring-1 ring-accent/30 shadow-inner max-w-fit leading-none">
+                                                                    {variant.tone}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        {seg && (
+                                                            <p className="text-sm text-primary/90 mb-2.5 flex items-start gap-1.5 font-medium leading-tight">
+                                                                <Users className="h-4 w-4 shrink-0 mt-0.5" />
+                                                                <span className="line-clamp-2">{seg.name}</span>
+                                                            </p>
+                                                        )}
+                                                        <h4
+                                                            className="font-bold text-foreground text-base line-clamp-2 leading-snug"
+                                                            title={variant.subject}
+                                                        >
+                                                            {variant.subject}
+                                                        </h4>
+                                                    </div>
+                                                    <div className="p-5 bg-secondary/10 flex-1 overflow-hidden relative">
+                                                        <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-background via-background/80 to-transparent pointer-events-none" />
+                                                        <div
+                                                            className="prose prose-sm prose-invert max-w-none text-sm text-muted-foreground line-clamp-4 font-sans leading-relaxed"
+                                                            dangerouslySetInnerHTML={{
+                                                                __html: variant.body_html.replace(
+                                                                    /<a /g,
+                                                                    '<a target="_blank" rel="noopener noreferrer" ',
+                                                                ),
+                                                            }}
+                                                        />
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+
+                                {/* Right Side: Fixed Preview Window */}
+                                <div className="w-full lg:w-[450px] xl:w-[500px] shrink-0">
+                                    <div className="sticky top-24 glass rounded-3xl overflow-hidden flex flex-col h-[650px] shadow-2xl border border-primary/20 bg-background/95 backdrop-blur-xl">
+                                        <div className="p-4 bg-secondary/30 border-b border-border text-center flex items-center justify-between">
+                                            <h3 className="font-bold text-lg text-foreground flex items-center gap-2">
+                                                <Mail className="h-5 w-5 text-primary" />
+                                                Email Preview
+                                            </h3>
+                                            {(selectedVariant !== null || hoveredVariant !== null) && (
+                                                <span className="text-xs font-medium text-muted-foreground px-2 py-1 rounded bg-secondary/50">
+                                                    {selectedVariant !== null ? "Pinned" : "Previewing"}
                                                 </span>
-                                                {variant.tone && (
-                                                    <span className="px-2 py-0.5 rounded text-xs font-medium bg-accent/10 text-accent">
-                                                        {variant.tone}
-                                                    </span>
-                                                )}
-                                            </div>
-                                            {seg && (
-                                                <p className="text-xs text-primary/70 mb-1 flex items-center gap-1">
-                                                    <Users className="h-3 w-3" />
-                                                    {seg.name}
-                                                </p>
                                             )}
-                                            <h4 className="font-semibold text-foreground">{variant.subject}</h4>
                                         </div>
-                                        <div className="p-5 bg-secondary/20">
-                                            <div
-                                                className="prose prose-sm prose-invert max-w-none text-sm text-muted-foreground"
-                                                dangerouslySetInnerHTML={{ __html: variant.body_html }}
-                                            />
+                                        <div className="flex-1 overflow-y-auto p-6 scroll-smooth">
+                                            {(() => {
+                                                const displayIndex =
+                                                    selectedVariant !== null ? selectedVariant : hoveredVariant;
+                                                if (
+                                                    displayIndex === null ||
+                                                    !campaignData.email_variants ||
+                                                    !campaignData.email_variants[displayIndex]
+                                                ) {
+                                                    return (
+                                                        <div className="h-full flex flex-col items-center justify-center text-muted-foreground space-y-4 opacity-50 transition-opacity hover:opacity-100">
+                                                            <div className="p-4 bg-secondary/20 rounded-full">
+                                                                <Mail className="h-16 w-16 mb-2 text-primary/60" />
+                                                            </div>
+                                                            <p className="text-xl font-bold tracking-tight text-foreground">
+                                                                Hover over a card to peek
+                                                            </p>
+                                                            <p className="text-sm font-medium">
+                                                                Click a card to lock the preview
+                                                            </p>
+                                                        </div>
+                                                    );
+                                                }
+                                                const variant = campaignData.email_variants[displayIndex];
+                                                const seg = campaignData.segments?.find(
+                                                    s => s.segment_id === variant.segment_id,
+                                                );
+
+                                                return (
+                                                    <div className="space-y-6 animate-in fade-in zoom-in-95 duration-200">
+                                                        <div className="space-y-4 pb-6 border-b border-border/40">
+                                                            <div className="flex items-center justify-between gap-4">
+                                                                <div className="space-y-1">
+                                                                    <span className="text-xs font-bold text-muted-foreground uppercase tracking-widest bg-secondary/50 px-2 py-1 rounded-md">
+                                                                        {variant.variant_id ||
+                                                                            `Variant ${String.fromCharCode(65 + displayIndex)}`}
+                                                                    </span>
+                                                                    {seg && (
+                                                                        <div className="text-sm text-primary flex items-center gap-2 font-medium mt-2">
+                                                                            <Users className="h-4 w-4" />
+                                                                            {seg.name}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                {variant.tone && (
+                                                                    <div className="px-3 py-1.5 rounded-full text-xs font-bold bg-accent/20 text-accent ring-1 ring-accent/30 shadow-inner">
+                                                                        {variant.tone}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-xs text-muted-foreground mb-1 font-semibold uppercase">
+                                                                    Subject Line
+                                                                </p>
+                                                                <h4 className="text-xl font-bold text-foreground leading-snug">
+                                                                    {variant.subject}
+                                                                </h4>
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <p className="text-xs text-muted-foreground mb-3 font-semibold uppercase">
+                                                                Body Content
+                                                            </p>
+                                                            <div
+                                                                className="prose prose-base prose-invert max-w-none text-foreground leading-relaxed font-sans bg-secondary/10 p-5 rounded-2xl border border-secondary/30"
+                                                                dangerouslySetInnerHTML={{
+                                                                    __html: variant.body_html.replace(
+                                                                        /<a /g,
+                                                                        '<a target="_blank" rel="noopener noreferrer" ',
+                                                                    ),
+                                                                }}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })()}
                                         </div>
                                     </div>
-                                    );
-                                })}
+                                </div>
                             </div>
 
-                            {/* Actions */}
-                            <div className="flex flex-col sm:flex-row gap-4 max-w-xl mx-auto">
-                                <button
-                                    onClick={approve}
-                                    disabled={loading}
-                                    className="flex-1 flex items-center justify-center gap-2 px-6 py-4 rounded-xl bg-accent text-accent-foreground font-bold text-base transition-all hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 glow-accent"
-                                >
-                                    {loading ? (
-                                        <Loader2 className="h-5 w-5 animate-spin" />
-                                    ) : (
-                                        <CheckCircle2 className="h-5 w-5" />
-                                    )}
-                                    Approve & Execute
-                                </button>
-                                <div className="flex-1 space-y-2">
-                                    <input
-                                        type="text"
-                                        placeholder="Feedback for regeneration..."
-                                        value={feedback}
-                                        onChange={e => setFeedback(e.target.value)}
-                                        className="w-full bg-secondary/50 border border-border/50 rounded-xl px-4 py-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-destructive/50"
-                                    />
+                            {/* Actions Container */}
+                            <div className="glass p-6 rounded-3xl mx-auto shadow-xl border-t border-primary/20 bg-background/50 backdrop-blur-md mt-6">
+                                <div className="flex flex-col md:flex-row gap-6 items-stretch">
                                     <button
-                                        onClick={reject}
-                                        disabled={loading || !feedback.trim()}
-                                        className="w-full flex items-center justify-center gap-2 px-6 py-3 rounded-xl border border-destructive/30 text-destructive font-semibold text-sm transition-all hover:bg-destructive/10 disabled:opacity-50"
+                                        onClick={approve}
+                                        disabled={loading}
+                                        className="flex-1 flex items-center justify-center gap-3 px-8 py-5 rounded-2xl bg-accent text-accent-foreground font-extrabold text-lg shadow-lg hover:shadow-accent/25 hover:-translate-y-0.5 transition-all active:scale-[0.98] disabled:opacity-50 glow-accent"
                                     >
-                                        <XCircle className="h-4 w-4" />
-                                        Reject & Regenerate
+                                        {loading ? (
+                                            <Loader2 className="h-6 w-6 animate-spin" />
+                                        ) : (
+                                            <CheckCircle2 className="h-6 w-6" />
+                                        )}
+                                        Approve & Launch Campaign
                                     </button>
+
+                                    <div className="flex-[1.5] flex flex-col sm:flex-row gap-4">
+                                        <div className="flex-1 relative">
+                                            <textarea
+                                                placeholder="Need changes? Provide feedback for the AI to regenerate..."
+                                                value={feedback}
+                                                onChange={e => setFeedback(e.target.value)}
+                                                rows={2}
+                                                className="w-full h-full bg-secondary/30 border border-border/50 rounded-2xl px-5 py-4 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-destructive/50 resize-none font-medium transition-colors hover:bg-secondary/40"
+                                            />
+                                        </div>
+                                        <button
+                                            onClick={reject}
+                                            disabled={loading || !feedback.trim()}
+                                            className="sm:w-48 flex flex-col items-center justify-center gap-2 px-4 py-4 rounded-2xl border-2 border-destructive/40 text-destructive font-bold text-sm transition-all hover:bg-destructive/10 hover:border-destructive/60 hover:-translate-y-0.5 active:scale-[0.98] disabled:opacity-50 disabled:hover:translate-y-0 shadow-sm"
+                                        >
+                                            <XCircle className="h-5 w-5 mb-1" />
+                                            Reject & Retry
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </motion.div>
@@ -395,243 +548,16 @@ const Dashboard = () => {
                     {/* STATE C: Analytics */}
                     {state === "analytics" && campaignData && (
                         <motion.div key="analytics" {...pageVariants}>
-                            <div className="text-center mb-10">
-                                <h2 className="text-3xl font-bold text-foreground mb-2">Campaign Performance</h2>
-                                <p className="text-muted-foreground">
-                                    A/B test results and AI-driven optimization insights.
-                                </p>
-                            </div>
-
-                            {/* Optimization Trajectory Chart */}
-                            {campaignData.optimization_history && campaignData.optimization_history.length > 0 && (
-                                <div className="p-8 mb-8 border rounded-2xl border-white/10 bg-card/50 glass gradient-border">
-                                    <h3 className="mb-6 text-lg font-semibold text-white flex items-center gap-2">
-                                        <TrendingUp className="h-5 w-5 text-primary" />
-                                        Optimization Trajectory (Thompson Sampling)
-                                    </h3>
-                                    <div className="h-[300px] w-full">
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <LineChart
-                                                data={campaignData.optimization_history.map((h, i) => {
-                                                    // Compute actual avg composite from performance reports for this iteration's data
-                                                    // Each optimization_history entry corresponds to one iteration
-                                                    const iterNum = h.iteration ?? i;
-                                                    // Get all reports — use the best composite per iteration as a proxy
-                                                    const allReports = campaignData.performance_reports || [];
-                                                    // Use average composite score across all reports as a fallback metric
-                                                    const avgComposite = allReports.length > 0
-                                                        ? allReports.reduce((sum, r) => sum + (r.composite_score || 0), 0) / allReports.length
-                                                        : 0;
-                                                    return {
-                                                        iteration: `Iter ${iterNum + 1}`,
-                                                        composite: Number(avgComposite.toFixed(4)),
-                                                    };
-                                                })}
-                                            >
-                                                <CartesianGrid strokeDasharray="3 3" stroke="#333" vertical={false} />
-                                                <XAxis
-                                                    dataKey="iteration"
-                                                    stroke="#888"
-                                                    fontSize={12}
-                                                    tickLine={false}
-                                                    axisLine={false}
-                                                />
-                                                <YAxis
-                                                    stroke="#888"
-                                                    fontSize={12}
-                                                    tickLine={false}
-                                                    axisLine={false}
-                                                    domain={[0, 1]}
-                                                />
-                                                <Tooltip
-                                                    contentStyle={{
-                                                        backgroundColor: "#111",
-                                                        borderColor: "#333",
-                                                        borderRadius: "12px",
-                                                    }}
-                                                    itemStyle={{ color: "#fff" }}
-                                                />
-                                                <Line
-                                                    type="monotone"
-                                                    dataKey="composite"
-                                                    name="Avg Score"
-                                                    stroke="#3b82f6"
-                                                    strokeWidth={3}
-                                                    dot={{ r: 5, fill: "#3b82f6", strokeWidth: 0 }}
-                                                    activeDot={{ r: 8, fill: "#60a5fa" }}
-                                                />
-                                            </LineChart>
-                                        </ResponsiveContainer>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Metrics Empty State */}
-                            {(!campaignData.performance_reports || campaignData.performance_reports.length === 0) && (
-                                <div className="flex flex-col items-center justify-center p-16 text-center border border-dashed rounded-2xl border-white/10 bg-black/20 mb-8">
-                                    <Activity className="w-12 h-12 mb-4 opacity-50 text-muted-foreground" />
-                                    <h3 className="text-xl font-medium text-white">No Metrics Available Yet</h3>
-                                    <p className="max-w-md mt-2 text-sm text-muted-foreground">
-                                        Metrics will populate once the execution cycle completes. Thompson sampling
-                                        updates real-time.
-                                    </p>
-                                </div>
-                            )}
-
-                            {/* Metrics Cards — Grouped by Segment */}
-                            {campaignData.performance_reports && campaignData.performance_reports.length > 0 && (
-                                <div className="space-y-6 mb-8">
-                                    {Object.entries(
-                                        (campaignData.performance_reports || []).reduce<Record<string, PerformanceReport[]>>((acc, r) => {
-                                            const key = r.segment_id || "unknown";
-                                            (acc[key] = acc[key] || []).push(r);
-                                            return acc;
-                                        }, {})
-                                    ).map(([segId, reports]) => {
-                                        const segName = campaignData.segments?.find(s => s.segment_id === segId)?.name || segId;
-                                        const bestReport = reports.reduce((a, b) => ((a.composite_score || 0) >= (b.composite_score || 0) ? a : b));
-                                        return (
-                                            <div key={segId}>
-                                                <h4 className="text-sm font-semibold text-primary mb-3 flex items-center gap-2">
-                                                    <Users className="h-4 w-4" />
-                                                    {segName}
-                                                </h4>
-                                                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                                                    {reports.map((report, i) => {
-                                                        const isWinner = report === bestReport && reports.length > 1;
-                                                        return (
-                                                        <div key={i} className={`glass rounded-2xl p-6 gradient-border ${isWinner ? "ring-1 ring-accent/50" : ""}`}>
-                                                            <div className="flex items-center justify-between mb-4">
-                                                                <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                                                                    {report.variant_id || `Variant ${String.fromCharCode(65 + i)}`}
-                                                                </span>
-                                                                {isWinner && (
-                                                                    <span className="px-2 py-0.5 rounded text-xs font-bold bg-accent/20 text-accent">
-                                                                        Winner
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                            <div className="space-y-4">
-                                                                <div>
-                                                                    <div className="flex items-center justify-between text-sm mb-1">
-                                                                        <span className="text-muted-foreground">Open Rate</span>
-                                                                        <span className="font-semibold text-foreground">
-                                                                            {((report.open_rate || 0) * 100).toFixed(1)}%
-                                                                        </span>
-                                                                    </div>
-                                                                    <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                                                                        <div
-                                                                            className="h-full bg-primary rounded-full"
-                                                                            style={{ width: `${(report.open_rate || 0) * 100}%` }}
-                                                                        />
-                                                                    </div>
-                                                                </div>
-                                                                <div>
-                                                                    <div className="flex items-center justify-between text-sm mb-1">
-                                                                        <span className="text-muted-foreground">Click Rate</span>
-                                                                        <span className="font-semibold text-foreground">
-                                                                            {((report.click_rate || 0) * 100).toFixed(1)}%
-                                                                        </span>
-                                                                    </div>
-                                                                    <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                                                                        <div
-                                                                            className="h-full bg-accent rounded-full"
-                                                                            style={{ width: `${(report.click_rate || 0) * 100}%` }}
-                                                                        />
-                                                                    </div>
-                                                                </div>
-                                                                <div className="pt-2 border-t border-border/50 flex items-center justify-between">
-                                                                    <span className="text-sm text-muted-foreground">
-                                                                        Composite Score
-                                                                    </span>
-                                                                    <span className="text-xl font-bold text-gradient">
-                                                                        {((report.composite_score || 0) * 100).toFixed(1)}
-                                                                    </span>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-
-                            {/* AI Reasoning */}
-                            {campaignData.optimization_history && campaignData.optimization_history.length > 0 && (
-                                <div className="glass rounded-2xl p-8 gradient-border">
-                                    <div className="flex items-center gap-3 mb-6">
-                                        <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary/10 text-primary">
-                                            <Brain className="h-5 w-5" />
-                                        </div>
-                                        <div>
-                                            <h3 className="font-semibold text-foreground">AI Reasoning</h3>
-                                            <p className="text-xs text-muted-foreground">
-                                                Strategic optimization insights
-                                            </p>
-                                        </div>
-                                    </div>
-                                    <div className="space-y-4">
-                                        {campaignData.optimization_history.map((entry, i) => (
-                                            <div
-                                                key={i}
-                                                className="flex gap-4 p-4 rounded-xl bg-secondary/30 border border-border/30"
-                                            >
-                                                <div className="flex-shrink-0 mt-0.5">
-                                                    <TrendingUp className="h-4 w-4 text-accent" />
-                                                </div>
-                                                <div className="space-y-2 flex-1">
-                                                    {entry.action_taken && (
-                                                        <p className="text-sm font-medium text-foreground">
-                                                            Iteration {(entry.iteration ?? i) + 1}: {entry.action_taken}
-                                                        </p>
-                                                    )}
-                                                    {entry.insight && (
-                                                        <p className="text-sm text-muted-foreground">{entry.insight}</p>
-                                                    )}
-                                                    {/* Structured optimization data */}
-                                                    <div className="flex flex-wrap gap-1.5 mt-1">
-                                                        {(entry.winning_tones || []).map(t => (
-                                                            <span key={`w-${t}`} className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-accent/15 text-accent border border-accent/20">
-                                                                <CheckCircle2 className="h-2.5 w-2.5 mr-1" /> {t}
-                                                            </span>
-                                                        ))}
-                                                        {(entry.losing_tones || []).map(t => (
-                                                            <span key={`l-${t}`} className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-destructive/15 text-destructive border border-destructive/20">
-                                                                <XCircle className="h-2.5 w-2.5 mr-1" /> {t}
-                                                            </span>
-                                                        ))}
-                                                    </div>
-                                                    {(entry.winning_elements || []).length > 0 && (
-                                                        <p className="text-xs text-muted-foreground/70 mt-1">
-                                                            Key elements: {entry.winning_elements?.join(", ")}
-                                                        </p>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* New campaign */}
-                            <div className="text-center mt-10">
-                                <button
-                                    onClick={() => {
-                                        setState("brief");
-                                        setBrief("");
-                                        setCampaignData(null);
-                                        setThreadId("");
-                                        setIteration(1);
-                                    }}
-                                    className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border border-border/50 text-muted-foreground hover:text-foreground hover:bg-secondary/50 transition-colors text-sm font-medium"
-                                >
-                                    <Sparkles className="h-4 w-4" />
-                                    Start New Campaign
-                                </button>
-                            </div>
+                            <Metrics
+                                data={campaignData}
+                                onRestart={() => {
+                                    setState("brief");
+                                    setBrief("");
+                                    setCampaignData(null);
+                                    setThreadId("");
+                                    setIteration(1);
+                                }}
+                            />
                         </motion.div>
                     )}
                 </AnimatePresence>
@@ -641,4 +567,3 @@ const Dashboard = () => {
 };
 
 export default Dashboard;
-1
